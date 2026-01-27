@@ -145,6 +145,11 @@
       <div class="row" style="margin-top:8px;">
         <span class="status" id="specInfo">No session loaded</span>
       </div>
+      <div class="row" style="margin-top:8px;">
+        <label for="sliceBinInput">ω bin:</label>
+        <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
+        <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
+      </div>
       <input id="specFileInput" type="file" accept="application/json" style="display:none" />
     </div>
   </div>
@@ -251,6 +256,7 @@
       this.entityAutoBtn=document.getElementById('entityAuto'); this.entityLockBtn=document.getElementById('entityLock'); this.entityLabel=document.getElementById('entityLabel');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
+      this.sliceBinInput=document.getElementById('sliceBinInput'); this.toggleCubeSliceBtn=document.getElementById('toggleCubeSlice');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
 
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
@@ -278,12 +284,15 @@
       this._specReplayStart=0;
       this._specReplayLevel=null;
       this._specReplaySmooth=0.35;
+      this.cubeSliceBin=6;
+      this.showCubeSlice=true;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
+      if (this.sliceBinInput) this.sliceBinInput.value = String(this.cubeSliceBin);
 
       this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
@@ -358,6 +367,13 @@
       this.exportSpecBtn.addEventListener('click',()=>this.exportSpectrogramSession());
       this.importSpecBtn.addEventListener('click',()=>this._triggerSpecImport());
       this.replaySpecBtn.addEventListener('click',()=>this.replaySpectrogramSession());
+      if(this.sliceBinInput){
+        this.sliceBinInput.addEventListener('change',()=>this._applySliceBinFromInput());
+        this.sliceBinInput.addEventListener('blur',()=>this._applySliceBinFromInput());
+      }
+      if(this.toggleCubeSliceBtn){
+        this.toggleCubeSliceBtn.addEventListener('click',()=>this._toggleCubeSlice());
+      }
       this.specFileInput.addEventListener('change',e=>this._handleSpecImportFile(e));
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
       this.canvas.addEventListener('mousedown',e=>{this.dragging=true;this.dragStart=[e.clientX,e.clientY]});
@@ -628,6 +644,36 @@
       this._syncSpeedField();
       this._updateStatus();
     }
+    _syncSliceBinField(){
+      if (this.sliceBinInput) this.sliceBinInput.value = String(this.cubeSliceBin);
+    }
+    _resolveSliceBinLimit(){
+      const binsFromMeta=this._specMeta?.bins;
+      const binsFromFrames=this._specFrames[0]?.bins?.length;
+      const bins=Math.max(
+        binsFromMeta ?? 0,
+        binsFromFrames ?? 0,
+        this.liveSpecBins/2
+      );
+      return Math.max(2, bins|0);
+    }
+    _applySliceBinFromInput(){
+      if (!this.sliceBinInput) return;
+      const v=parseInt(this.sliceBinInput.value,10);
+      if (!Number.isFinite(v)) { this._syncSliceBinField(); return; }
+      const limit=this._resolveSliceBinLimit();
+      this.cubeSliceBin=clamp(v,1,limit-1);
+      this._syncSliceBinField();
+      this._render();
+    }
+    _toggleCubeSlice(){
+      this.showCubeSlice=!this.showCubeSlice;
+      if(this.toggleCubeSliceBtn){
+        this.toggleCubeSliceBtn.setAttribute('aria-pressed',String(this.showCubeSlice));
+        this.toggleCubeSliceBtn.textContent=this.showCubeSlice?'L×t Slice':'L×t Slice (Off)';
+      }
+      this._render();
+    }
 
     _warnIfHeavy(){
       if(this._popupShown||this.levels<2) return true;
@@ -862,6 +908,103 @@
       ctx.fillStyle=this.whiteBg?'#000':'#fff';
       ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
       ctx.fillText(`Stack FFT | k=${k} | L=${Lmin}-${resolvedLmax}`,x0,y0-10);
+      ctx.restore();
+    }
+    _drawLevelTimeSlice({bin=this.cubeSliceBin,cellSize=3,Lmin=1,Lmax=null}={}){
+      if(!this.showCubeSlice) return;
+      if(!this._specFrames.length) return;
+      const frames=this._specFrames;
+      const bins=frames[0]?.bins?.length;
+      if(!bins) return;
+
+      const resolvedBin=clamp(Math.round(bin),1,bins-1);
+      this.cubeSliceBin=resolvedBin;
+      this._syncSliceBinField();
+
+      let framesLmax=0;
+      for(const frame of frames){
+        if(typeof frame.level!=="number") continue;
+        framesLmax=Math.max(framesLmax,Math.round(frame.level));
+      }
+      const resolvedLmax=Math.max(Lmax??this._specMeta?.levelsMax??this.levels,framesLmax);
+      if(resolvedLmax<Lmin) return;
+
+      const rows=resolvedLmax-Lmin+1;
+      const maxCols=160;
+      const cols=Math.min(maxCols,frames.length);
+      if(cols<=1) return;
+
+      const grid=Array.from({length:rows},()=>new Float32Array(cols));
+      const duration=Math.max(1,frames[frames.length-1]?.t ?? frames.length-1);
+
+      let maxVal=0;
+      for(const frame of frames){
+        if(typeof frame.level!=="number") continue;
+        const row=Math.round(frame.level)-Lmin;
+        if(row<0||row>=rows) continue;
+        const t=Math.max(0,frame.t??0);
+        const col=Math.round((t/duration)*(cols-1));
+        const val=frame.bins?.[resolvedBin] ?? 0;
+        if(val<=0) continue;
+        const prev=grid[row][col];
+        if(val>prev) grid[row][col]=val;
+        if(val>maxVal) maxVal=val;
+      }
+
+      const ctx=this.ctx;
+      const w=cols*cellSize;
+      const h=rows*cellSize;
+      const x0=this.canvas.clientWidth-w-16;
+      const y0=16;
+
+      ctx.save();
+      ctx.globalAlpha=0.95;
+      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillRect(x0-6,y0-6,w+12,h+12);
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.strokeRect(x0-6,y0-6,w+12,h+12);
+
+      const scale=maxVal>0?255/maxVal:0;
+      for(let y=0;y<rows;y++){
+        const row=grid[y];
+        for(let x=0;x<cols;x++){
+          const v=row[x];
+          if(v<=0) continue;
+          const intensity=Math.min(255,Math.floor(v*scale));
+          ctx.fillStyle=this.whiteBg
+            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
+            : `rgb(${intensity},${intensity},${intensity})`;
+          ctx.fillRect(x0+x*cellSize,y0+y*cellSize,cellSize,cellSize);
+        }
+      }
+
+      if(this._specReplayActive&&this._specFrames.length){
+        const idx=Math.min(this._specReplayIndex,this._specFrames.length-1);
+        const t=Math.max(0,this._specFrames[idx]?.t ?? 0);
+        const cursorCol=Math.round((t/duration)*(cols-1));
+        const cursorX=x0+cursorCol*cellSize;
+        ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+        ctx.globalAlpha=0.75;
+        ctx.beginPath();
+        ctx.moveTo(cursorX,y0-6);
+        ctx.lineTo(cursorX,y0+h+6);
+        ctx.stroke();
+      }
+
+      if(typeof this._specReplayLevel==="number"){
+        const cursorRow=Math.round(this._specReplayLevel)-Lmin;
+        if(cursorRow>=0&&cursorRow<rows){
+          const cursorY=y0+cursorRow*cellSize;
+          ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+          ctx.globalAlpha=0.75;
+          ctx.strokeRect(x0-6,cursorY-1,w+12,cellSize+2);
+        }
+      }
+
+      ctx.globalAlpha=1;
+      ctx.fillStyle=this.whiteBg?'#000':'#fff';
+      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(`L×t @ ω${resolvedBin} | L=${Lmin}-${resolvedLmax}`,x0,y0-10);
       ctx.restore();
     }
     _trackLivePeaks(mag){
@@ -1265,6 +1408,9 @@
           : this.entityIndex;
         const Lmax=this._specMeta?.levelsMax??this.levels;
         this._drawEntitySpectrogram(specEntity,{Lmax});
+      }
+      if(drew&&this._specFrames.length&&this.showCubeSlice){
+        this._drawLevelTimeSlice();
       }
     }
 
