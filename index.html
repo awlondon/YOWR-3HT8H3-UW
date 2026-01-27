@@ -264,6 +264,7 @@
       this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
+      this.activeEntityK=0;
       this.entityFocusActive=false;
       this.primaryView="omega-level";
       this.cubeSliceBin=6;
@@ -296,6 +297,11 @@
       this._spectrogramCache={key:null,data:null};
       this._spectrogramCacheMap=new Map();
       this._fingerprintCache=new Map();
+      this._omegaLevelCache=new Map();
+      this._analysisBins=128;
+      this._entitySignal=null;
+      this._entityFFT=null;
+      this._hudWarning=null;
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -563,7 +569,12 @@
         selectedLevel:typeof data.selectedLevel==="number"?data.selectedLevel:this.selectedLevel
       };
 
-      if(typeof this._specMeta.entityK==="number") this.liveSpecEntityK=this._specMeta.entityK;
+      if(typeof this._specMeta.entityK==="number"){
+        this.liveSpecEntityK=this._specMeta.entityK;
+        this.activeEntityK=this._specMeta.entityK;
+        this.entityIndex=this._specMeta.entityK;
+        this._updateEntityLabel();
+      }
       if(typeof this._specMeta.selectedOmega==="number"){
         this.selectedOmega=this._specMeta.selectedOmega;
         this.cubeSliceBin=clamp(Math.round(this.selectedOmega),1,this._resolveSliceBinLimit()-1);
@@ -587,7 +598,12 @@
       }
       const binsHalf=this._specMeta?.bins||this._specFrames[0]?.bins?.length||this.liveSpecBins/2;
       this._resetLiveSpecBuffer(binsHalf);
-      if(this._specMeta?.entityK!==undefined) this.liveSpecEntityK=this._specMeta.entityK;
+      if(this._specMeta?.entityK!==undefined){
+        this.liveSpecEntityK=this._specMeta.entityK;
+        this.activeEntityK=this._specMeta.entityK;
+        this.entityIndex=this._specMeta.entityK;
+        this._updateEntityLabel();
+      }
       const firstLevel=this._specFrames[0]?.level ?? this._specMeta?.levels ?? this.levels;
       this._specReplayLevel=(typeof firstLevel==="number")?firstLevel:null;
       this.liveSpecEnabled=true;
@@ -652,6 +668,93 @@
       }
       const bins=this._specMeta?.bins??(this.liveSpecBins/2);
       this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
+    }
+
+    analysisTick(dtSec){
+      this._ensureDemoMode();
+      this._updateEntitySignal();
+      this._updateFFT();
+      this._updateOmegaLevelCache();
+    }
+
+    _ensureDemoMode(){
+      const anyAnalysisActive=this.liveSpecEnabled||this._specReplayActive||this.primaryView==="omega-level";
+      if(anyAnalysisActive) return;
+      this.liveSpecEnabled=true;
+      this.primaryView="omega-level";
+      if(this.emergentActive) this._startSpectrogramRecording();
+      this._statusMsg("Demo mode: Live FFT enabled, view set to ω–L.");
+    }
+
+    _resolveActiveEntity(){
+      const n=this.sides;
+      const base=(this.activeEntityK??this.entityIndex??0);
+      const normalized=((base%n)+n)%n;
+      this.activeEntityK=normalized;
+      if(this.entityIndex!==normalized) this.entityIndex=normalized;
+      return normalized;
+    }
+
+    _updateEntitySignal(){
+      const bins=this._ensureFftBins(this._analysisBins,"Entity Signal");
+      this._analysisBins=bins;
+      const k=this._resolveActiveEntity();
+      this._entitySignal=this._computeEntitySignal(k,bins);
+    }
+
+    _updateFFT(){
+      if(!this._entitySignal){this._entityFFT=null; return;}
+      const bins=this._ensureFftBins(this._entitySignal.length,"FFT");
+      if(bins!==this._entitySignal.length){
+        this._analysisBins=bins;
+        const k=this._resolveActiveEntity();
+        this._entitySignal=this._computeEntitySignal(k,bins);
+        if(!this._entitySignal){this._entityFFT=null; return;}
+      }
+      this._entityFFT=this._fftMagnitude(this._entitySignal);
+    }
+
+    _omegaLevelCacheKey({k,Lmax,bins}){
+      return `${this.sides}:${Lmax}:${k}:${bins}:1`;
+    }
+    _computeOmegaLevel(Lmax){
+      const k=this._resolveActiveEntity();
+      const bins=this._ensureFftBins(this._analysisBins,"ω–L");
+      this._analysisBins=bins;
+      const {spec}=this._getNormalizedSpectrogram(k,{bins,Lmin:1,Lmax,allowCompute:true});
+      if(!spec) return null;
+      const cacheKey=this._omegaLevelCacheKey({k,Lmax,bins});
+      this._omegaLevelCache.set(cacheKey,true);
+      return spec;
+    }
+    _updateOmegaLevelCache(){
+      const Lmax=Math.max(1,this._specMeta?.levelsMax??this.levels);
+      const k=this._resolveActiveEntity();
+      const bins=this._ensureFftBins(this._analysisBins,"ω–L");
+      const cacheKey=this._omegaLevelCacheKey({k,Lmax,bins});
+      if(this._omegaLevelCache.has(cacheKey)) return;
+      this._computeOmegaLevel(Lmax);
+    }
+
+    _pushHudWarning(msg,ttlMs=2500){
+      this._hudWarning={msg,expires:performance.now()+ttlMs};
+    }
+    _isPowerOfTwo(n){
+      return n>0 && (n & (n-1))===0;
+    }
+    _nearestPowerOfTwo(n){
+      if(n<=1) return 1;
+      const power=Math.round(Math.log2(n));
+      return Math.pow(2,power);
+    }
+    _ensureFftBins(bins,context="FFT"){
+      const raw=Math.max(2,Math.round(bins||0));
+      if(this._isPowerOfTwo(raw)) return raw;
+      const adjusted=Math.max(2,this._nearestPowerOfTwo(raw));
+      if(adjusted!==raw){
+        this._pushHudWarning(`${context}: bins rounded to ${adjusted} (was ${raw})`);
+      }
+      return adjusted;
     }
 
     _updateButtonsEnabled(){this.viewPortalBtn.disabled=this.levels<1; this.pauseEmergentBtn.disabled=!this.emergentActive; const step=this.emergentActive&&this.emergentPaused; this.stepBackBtn.disabled=!step; this.stepForwardBtn.disabled=!step}
@@ -723,6 +826,7 @@
         this._spectrogramCache={key:null,data:null};
         if(this._spectrogramCacheMap) this._spectrogramCacheMap.clear();
         if(this._fingerprintCache) this._fingerprintCache.clear();
+        if(this._omegaLevelCache) this._omegaLevelCache.clear();
       }
 
       const K=totalReplications(this.sides,this.levels), a=clamp(this.alpha,0,1), cumulative=1-Math.pow(1-a,Math.min(K,5000));
@@ -847,13 +951,14 @@
     _computeEntitySpectrogram(k,{Lmin=1,Lmax=this.levels,bins=128}={}){
       const originalLevels=this.levels;
       const spectra=[];
+      const resolvedBins=this._ensureFftBins(bins,"ω–L");
 
       for(let L=Lmin;L<=Lmax;L++){
         this.levels=L;
         this.gen.setLevels(L);
         this.gen.computeLevels();
 
-        const signal=this._computeEntitySignal(k,bins);
+        const signal=this._computeEntitySignal(k,resolvedBins);
         if(!signal){
           spectra.push(null);
           continue;
@@ -1042,7 +1147,8 @@
       return dot/Math.sqrt(a*b);
     }
     _drawEntitySpectrogram(k,{bins=128,cellSize=3,Lmin=1,Lmax=null}={}){
-      const {spec,resolvedLmax,cacheKey}=this._getNormalizedSpectrogram(k,{bins,Lmin,Lmax,allowCompute:true});
+      const resolvedBins=this._ensureFftBins(bins,"ω–L");
+      const {spec,resolvedLmax,cacheKey}=this._getNormalizedSpectrogram(k,{bins:resolvedBins,Lmin,Lmax,allowCompute:false});
       if(spec&&this._spectrogramCache?.key!==cacheKey){
         this._spectrogramCache={key:cacheKey,data:spec};
       }
@@ -1348,6 +1454,10 @@
         return;
       }
 
+      const adjustedBins=this._ensureFftBins(this.liveSpecBins,"Live FFT");
+      if(adjustedBins!==this.liveSpecBins){
+        this._resetLiveSpecBuffer(adjustedBins/2);
+      }
       const bins=this.liveSpecBins;
       const k=((this.liveSpecEntityK%this.sides)+this.sides)%this.sides;
 
@@ -1503,7 +1613,8 @@
       return mag;
     }
     _drawEntityFFTOverlay(k){
-      const sig=this._computeEntitySignal(k,128);
+      const bins=this._ensureFftBins(128,"FFT Overlay");
+      const sig=this._computeEntitySignal(k,bins);
       if(!sig) return;
 
       const mag=this._fftMagnitude(sig);
@@ -1537,9 +1648,10 @@
     }
     _updateEntityLabel(){
       const n=this.sides;
-      if(this.entityIndex>=n) this.entityIndex%=n;
-      if(this.entityIndex<0) this.entityIndex=(this.entityIndex%n+n)%n;
-      if(this.entityLabel) this.entityLabel.textContent=`Entity ${this.entityIndex+1} / ${n}`;
+      const normalized=((this.activeEntityK??this.entityIndex)%n+n)%n;
+      this.activeEntityK=normalized;
+      this.entityIndex=normalized;
+      if(this.entityLabel) this.entityLabel.textContent=`Entity ${normalized+1} / ${n}`;
     }
     _stopRotationsForEntity(){
       if(this.rotationActive||this.emergentActive){
@@ -1594,6 +1706,7 @@
       const targetRect=[fx-extent,fy-extent,fx+extent,fy+extent];
 
       this.entityIndex=kk;
+      this.activeEntityK=kk;
       this.entityFocusActive=true;
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
@@ -1700,8 +1813,8 @@
       }
       if(drew&&(this.entityFocusActive||this.entityAuto||this._specReplayActive)){
         const specEntity=this._specReplayActive
-          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.entityIndex)
-          : this.entityIndex;
+          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.activeEntityK)
+          : this.activeEntityK;
         const Lmax=this._specMeta?.levelsMax??this.levels;
         if(this.primaryView!=="omega-level"){
           this._drawEntitySpectrogram(specEntity,{Lmax});
@@ -1712,8 +1825,8 @@
       }
       if(drew&&this.primaryView==="omega-level"){
         const specEntity=this._specReplayActive
-          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.entityIndex)
-          : this.entityIndex;
+          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.activeEntityK)
+          : this.activeEntityK;
         const Lmax=this._specMeta?.levelsMax??this.levels;
         this._drawEntitySpectrogram(specEntity,{Lmax});
       }
@@ -1768,8 +1881,27 @@
       return {nodes:nodeId.size, edges:edgeSet.size};
     }
     _statusMsg(msg){this.statusEl.textContent=msg}
-    _updateStatus(){const fpsStr=(this.rotationActive||this.emergentActive)?` | ${this.fps.toFixed(0)} FPS`:''; this._statusMsg(`Sides: ${this.sides} | Levels: ${this.levels} | Alpha: ${this.alpha.toFixed(3)} | Rotation Speed: ${this.rotationSpeed.toFixed(3)}${fpsStr}`)}
-    _loop(){requestAnimationFrame((t)=>this._loop(t)); const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs); this._lastFrameTs=now; const dtSec=dt/1000; if(this.rotationActive||this.emergentActive){this._drawFrame(dtSec); this.fps=1000/dt; this._updateStatus()} else if(!this._drawnOnce){this._drawFrame(0); this._drawnOnce=true}}
+    _updateStatus(){
+      const fpsStr=(this.rotationActive||this.emergentActive)?` | ${this.fps.toFixed(0)} FPS`:'';
+      const warningActive=this._hudWarning&&this._hudWarning.expires>performance.now();
+      const warningStr=warningActive?` | ⚠ ${this._hudWarning.msg}`:'';
+      this._statusMsg(`Sides: ${this.sides} | Levels: ${this.levels} | Alpha: ${this.alpha.toFixed(3)} | Rotation Speed: ${this.rotationSpeed.toFixed(3)}${fpsStr}${warningStr}`);
+    }
+    _loop(){
+      requestAnimationFrame((t)=>this._loop(t));
+      const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs);
+      this._lastFrameTs=now;
+      const dtSec=dt/1000;
+      this.analysisTick(dtSec);
+      if(this.rotationActive||this.emergentActive){
+        this._drawFrame(dtSec);
+        this.fps=1000/dt;
+        this._updateStatus();
+      } else if(!this._drawnOnce){
+        this._drawFrame(0);
+        this._drawnOnce=true;
+      }
+    }
     _exposeFingerprintApi(){
       window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
       window.compareFingerprints=(f1,f2)=>this.compareFingerprints(f1,f2);
