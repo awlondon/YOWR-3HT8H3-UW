@@ -35,6 +35,17 @@
     .levels{display:flex;flex-wrap:wrap;gap:6px}.lvl-btn{min-width:32px;text-align:center}.lvl-btn.active{outline:2px solid var(--accent)}
     .code-label{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:13px;color:var(--accent);padding:4px 8px;background:#0f0f0f;border-radius:8px;border:1px solid var(--border);max-width:100%;overflow:hidden;text-overflow:ellipsis}
     .code-stack{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,38%);gap:12px;min-height:0;padding:0 12px 12px}
+    .main.spec-hidden{grid-template-columns:minmax(0,1fr)}
+    .panel{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+    .spectrogram{min-width:280px;max-width:60vw;resize:horizontal;overflow:auto}
+    .spec-header{padding:10px;border-bottom:1px solid var(--border);background:#0f0f0f}
+    .spec-controls{display:flex;flex-direction:column;gap:8px}
+    .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+    .spec-body{position:relative;flex:1;min-height:0;background:#05060a}
+    .spec-body canvas{width:100%;height:100%}
+    .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border)}
+    .spec-hidden #specPanel{display:none;}
     .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
     .help{color:var(--muted)} .status{color:var(--muted)}
     .entity-label{font-size:12px;color:var(--muted)}
@@ -141,6 +152,7 @@
         <button id="exportSpec" class="btn-neutral">Export Session</button>
         <button id="importSpec" class="btn-neutral">Import Session</button>
         <button id="replaySpec" class="btn-warning">Replay Session</button>
+        <button id="toggleSpecPanel" class="btn-neutral">Hide Panel</button>
       </div>
       <div class="row" style="margin-top:8px;">
         <span class="status" id="specInfo">No session loaded</span>
@@ -154,7 +166,34 @@
     </div>
   </div>
 
-  <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
+  <div class="main" id="mainPanel">
+    <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
+    <div id="specPanel" class="panel spectrogram">
+      <div class="spec-header">
+        <div class="spec-controls">
+          <div class="spec-row">
+            <strong>Spectrogram</strong>
+          </div>
+          <div class="spec-row">
+            <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
+            <button id="specViewOmegaTime" class="btn-neutral" aria-pressed="false">ω–t</button>
+            <button id="specViewLevelTime" class="btn-neutral" aria-pressed="false">L–t</button>
+          </div>
+          <div class="spec-row">
+            <button id="specZoomOmegaIn">Zoom ω +</button>
+            <button id="specZoomOmegaOut">Zoom ω −</button>
+            <button id="specZoomLevelIn">Zoom L +</button>
+            <button id="specZoomLevelOut">Zoom L −</button>
+            <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
+          </div>
+        </div>
+      </div>
+      <div class="spec-body">
+        <canvas id="specCanvas" width="1024" height="512"></canvas>
+        <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
+      </div>
+    </div>
+  </div>
 
   <footer>
     <div class="status" id="status">Ready</div>
@@ -169,6 +208,32 @@
   function hsvToRgb(h,s,v){let r=0,g=0,b=0,i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);switch(i%6){case 0:r=v;g=t;b=p;break;case 1:r=q;g=v;b=p;break;case 2:r=p;g=v;b=t;break;case 3:r=p;g=q;b=v;break;case 4:r=t;g=p;b=v;break;case 5:r=v;g=p;b=q;break}return[Math.round(r*255),Math.round(g*255),Math.round(b*255)]}
   const rgbaStr=(r,g,b,a)=>`rgba(${r},${g},${b},${a})`;
   function buildHsvPalette(n,s=.85,v=.95){const out=[],count=Math.max(1,n|0);for(let i=0;i<count;i++){const [r,g,b]=hsvToRgb(i/count,s,v);out.push([r,g,b,1])}return out}
+  const _specRampStops=[
+    [0.0,[8,12,28]],
+    [0.22,[28,42,98]],
+    [0.5,[44,110,168]],
+    [0.72,[76,183,136]],
+    [1.0,[245,243,153]]
+  ];
+  function _specColorRgb(v){
+    const t=clamp(v,0,1);
+    for(let i=1;i<_specRampStops.length;i++){
+      const [p1,c1]=_specRampStops[i-1];
+      const [p2,c2]=_specRampStops[i];
+      if(t<=p2){
+        const u=(t-p1)/(p2-p1||1);
+        const r=Math.round(c1[0]+(c2[0]-c1[0])*u);
+        const g=Math.round(c1[1]+(c2[1]-c1[1])*u);
+        const b=Math.round(c1[2]+(c2[2]-c1[2])*u);
+        return [r,g,b];
+      }
+    }
+    return [245,243,153];
+  }
+  function _specColor(v){
+    const [r,g,b]=_specColorRgb(v);
+    return `rgb(${r},${g},${b})`;
+  }
 
   function polygonVertices(center,radius,sides){
     const [cx,cy]=center, start=canonicalStartAngle(sides), arr=[];
@@ -255,9 +320,23 @@
       this.entityPrevBtn=document.getElementById('entityPrev'); this.entityNextBtn=document.getElementById('entityNext');
       this.entityAutoBtn=document.getElementById('entityAuto'); this.entityLockBtn=document.getElementById('entityLock'); this.entityLabel=document.getElementById('entityLabel');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
+      this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
       this.sliceBinInput=document.getElementById('sliceBinInput'); this.toggleCubeSliceBtn=document.getElementById('toggleCubeSlice');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
+      this.mainPanel=document.getElementById('mainPanel');
+      this.specPanel=document.getElementById('specPanel');
+      this.specCanvas=document.getElementById('specCanvas');
+      this.specCtx=this.specCanvas?this.specCanvas.getContext('2d'):null;
+      this.specReadout=document.getElementById('specReadout');
+      this.specViewOmegaLevelBtn=document.getElementById('specViewOmegaLevel');
+      this.specViewOmegaTimeBtn=document.getElementById('specViewOmegaTime');
+      this.specViewLevelTimeBtn=document.getElementById('specViewLevelTime');
+      this.specZoomOmegaInBtn=document.getElementById('specZoomOmegaIn');
+      this.specZoomOmegaOutBtn=document.getElementById('specZoomOmegaOut');
+      this.specZoomLevelInBtn=document.getElementById('specZoomLevelIn');
+      this.specZoomLevelOutBtn=document.getElementById('specZoomLevelOut');
+      this.specZoomResetBtn=document.getElementById('specZoomReset');
 
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
       this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
@@ -271,6 +350,13 @@
       this.selectedOmega=this.cubeSliceBin;
       this.selectedLevel=this.levels;
       this._omegaLevelPanel=null;
+      this._specPanelInfo=null;
+      this.specPanelVisible=true;
+      this.specZoomOmega=1;
+      this.specZoomLevel=1;
+      this.specPanOmega=0;
+      this.specPanLevel=0;
+      this._specLastReadout=null;
       // Live spectrogram (during Emergent)
       this.liveSpecEnabled=false;
       this.liveSpecEntityK=this.entityIndex ?? 0;
@@ -306,11 +392,15 @@
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
       if (this.sliceBinInput) this.sliceBinInput.value = String(this.cubeSliceBin);
+      if(this.specCanvas){
+        this.specCanvas.width=1024;
+        this.specCanvas.height=512;
+      }
 
       this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
-      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._updatePlot(true);
+      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._loop();
     }
 
@@ -334,7 +424,7 @@
     _estimateTriangles(n,L){const t0=(n%2===0)?Math.floor(n/2):Math.floor(n/2)+1; if(L<=0) return t0; return t0*Math.pow(n,L)}
     _isPortalZoomed(){const [xmin,ymin,xmax,ymax]=this._worldViewRect(); return Math.hypot(xmax-xmin,ymax-ymin)<1.25 }
 
-    _render(){ this._drawFrame(0); this._updateStatus(); this._drawnOnce=true }
+    _render(){ this._drawFrame(0); this._renderSpectrogramPanel(0); this._updateStatus(); this._drawnOnce=true }
 
     _buildLevelButtons(){ this.levelButtons.innerHTML=''; for(let L=0;L<=10;L++){const b=document.createElement('button'); b.className='lvl-btn'; b.textContent=String(L); if(L===this.levels)b.classList.add('active'); b.addEventListener('click',()=>this.setLevel(L)); this.levelButtons.appendChild(b)}}
     _markActiveLevel(){[...this.levelButtons.children].forEach((el,i)=>el.classList.toggle('active',i===this.levels))}
@@ -381,6 +471,21 @@
       this.exportSpecBtn.addEventListener('click',()=>this.exportSpectrogramSession());
       this.importSpecBtn.addEventListener('click',()=>this._triggerSpecImport());
       this.replaySpecBtn.addEventListener('click',()=>this.replaySpectrogramSession());
+      if(this.toggleSpecPanelBtn){
+        this.toggleSpecPanelBtn.addEventListener('click',()=>this._toggleSpecPanel());
+      }
+      if(this.specViewOmegaLevelBtn){
+        this.specViewOmegaLevelBtn.addEventListener('click',()=>this._setSpectrogramView('omega-level'));
+        this.specViewOmegaTimeBtn.addEventListener('click',()=>this._setSpectrogramView('omega-time'));
+        this.specViewLevelTimeBtn.addEventListener('click',()=>this._setSpectrogramView('level-time'));
+      }
+      if(this.specZoomOmegaInBtn){
+        this.specZoomOmegaInBtn.addEventListener('click',()=>this._zoomSpectrogram({omega:1.15}));
+        this.specZoomOmegaOutBtn.addEventListener('click',()=>this._zoomSpectrogram({omega:1/1.15}));
+        this.specZoomLevelInBtn.addEventListener('click',()=>this._zoomSpectrogram({level:1.15}));
+        this.specZoomLevelOutBtn.addEventListener('click',()=>this._zoomSpectrogram({level:1/1.15}));
+        this.specZoomResetBtn.addEventListener('click',()=>this._resetSpectrogramZoom());
+      }
       if(this.sliceBinInput){
         this.sliceBinInput.addEventListener('change',()=>this._applySliceBinFromInput());
         this.sliceBinInput.addEventListener('blur',()=>this._applySliceBinFromInput());
@@ -398,11 +503,12 @@
         this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render();
       });
       window.addEventListener('mouseup',()=>{this.dragging=false});
-      this.canvas.addEventListener('click',e=>{
-        if(this.dragMoved) return;
-        this._handleOmegaLevelClick(e.clientX,e.clientY);
-      });
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
+      if(this.specCanvas){
+        this.specCanvas.addEventListener('mousemove',e=>this._updateSpectrogramReadout(e));
+        this.specCanvas.addEventListener('mouseleave',()=>this._clearSpectrogramReadout());
+        this.specCanvas.addEventListener('click',e=>this._handleOmegaLevelClick(e.clientX,e.clientY));
+      }
       window.addEventListener('keydown',e=>{
         const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
         if(!typing){
@@ -681,7 +787,7 @@
       const anyAnalysisActive=this.liveSpecEnabled||this._specReplayActive||this.primaryView==="omega-level";
       if(anyAnalysisActive) return;
       this.liveSpecEnabled=true;
-      this.primaryView="omega-level";
+      this._setSpectrogramView("omega-level");
       if(this.emergentActive) this._startSpectrogramRecording();
       this._statusMsg("Demo mode: Live FFT enabled, view set to ω–L.");
     }
@@ -734,6 +840,87 @@
       const cacheKey=this._omegaLevelCacheKey({k,Lmax,bins});
       if(this._omegaLevelCache.has(cacheKey)) return;
       this._computeOmegaLevel(Lmax);
+    }
+
+    _toggleSpecPanel(){
+      this.specPanelVisible=!this.specPanelVisible;
+      if(this.mainPanel){
+        this.mainPanel.classList.toggle('spec-hidden',!this.specPanelVisible);
+      }
+      if(this.toggleSpecPanelBtn){
+        this.toggleSpecPanelBtn.textContent=this.specPanelVisible?'Hide Panel':'Show Panel';
+      }
+      this._resizeCanvas();
+      this._render();
+    }
+
+    _setSpectrogramView(view){
+      this.primaryView=view;
+      const setBtn=(btn,active)=>{
+        if(!btn) return;
+        btn.classList.toggle('btn-primary',active);
+        btn.classList.toggle('btn-neutral',!active);
+        btn.setAttribute('aria-pressed',String(active));
+      };
+      setBtn(this.specViewOmegaLevelBtn,view==='omega-level');
+      setBtn(this.specViewOmegaTimeBtn,view==='omega-time');
+      setBtn(this.specViewLevelTimeBtn,view==='level-time');
+      this._clearSpectrogramReadout();
+      this._renderSpectrogramPanel(0);
+    }
+
+    _zoomSpectrogram({omega=null,level=null}={}){
+      if(omega){
+        this.specZoomOmega=clamp(this.specZoomOmega*omega,1,8);
+      }
+      if(level){
+        this.specZoomLevel=clamp(this.specZoomLevel*level,1,8);
+      }
+      this._renderSpectrogramPanel(0);
+    }
+
+    _resetSpectrogramZoom(){
+      this.specZoomOmega=1;
+      this.specZoomLevel=1;
+      this.specPanOmega=0;
+      this.specPanLevel=0;
+      this._renderSpectrogramPanel(0);
+    }
+
+    _clearSpectrogramReadout(){
+      if(!this.specReadout) return;
+      this.specReadout.textContent='ω — | L — | val —';
+      this._specLastReadout=null;
+    }
+
+    _updateSpectrogramReadout(evt){
+      if(!this.specReadout||!this._specPanelInfo) return;
+      const rect=this.specCanvas.getBoundingClientRect();
+      const x=evt.clientX-rect.left;
+      const y=evt.clientY-rect.top;
+      const info=this._specPanelInfo;
+      const next=info.readoutAt(x,y);
+      if(!next) return;
+      if(next!==this._specLastReadout){
+        this.specReadout.textContent=next;
+        this._specLastReadout=next;
+      }
+    }
+
+    _renderSpectrogramPanel(dtSec){
+      if(!this.specPanelVisible||!this.specCtx||!this.specCanvas) return;
+      const view=this.primaryView;
+      const specEntity=this._specReplayActive
+        ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.activeEntityK)
+        : this.activeEntityK;
+      const Lmax=this._specMeta?.levelsMax??this.levels;
+      if(view==='omega-level'){
+        this._drawOmegaLevelSpectrogram(specEntity,{Lmax});
+      } else if(view==='omega-time'){
+        this._drawOmegaTimeSpectrogram();
+      } else if(view==='level-time'){
+        this._drawLevelTimeSpectrogram({Lmax});
+      }
     }
 
     _pushHudWarning(msg,ttlMs=2500){
@@ -1146,104 +1333,154 @@
       if(a<=0||b<=0) return 0;
       return dot/Math.sqrt(a*b);
     }
-    _drawEntitySpectrogram(k,{bins=128,cellSize=3,Lmin=1,Lmax=null}={}){
+    _drawOmegaLevelSpectrogram(k,{bins=128,Lmin=1,Lmax=null}={}){
       const resolvedBins=this._ensureFftBins(bins,"ω–L");
       const {spec,resolvedLmax,cacheKey}=this._getNormalizedSpectrogram(k,{bins:resolvedBins,Lmin,Lmax,allowCompute:false});
       if(spec&&this._spectrogramCache?.key!==cacheKey){
         this._spectrogramCache={key:cacheKey,data:spec};
       }
 
-      if(!spec||!spec.length) return;
-
-      const ctx=this.ctx;
-      const rows=spec.length;
-      const cols=Math.floor(bins/2);
-      const intensityScale=this.emergentActive
-        ? (0.9+0.1*Math.sin(this.emergentAngle*0.6))
-        : 1;
-
-      const w=cols*cellSize;
-      const h=rows*cellSize;
-
-      const x0=16;
-      const y0=this.canvas.clientHeight-h-16;
-      this._omegaLevelPanel={x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax};
+      const ctx=this.specCtx;
+      if(!ctx) return;
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
 
       ctx.save();
-      ctx.globalAlpha=0.95;
-      ctx.fillStyle=this.whiteBg?'#fff':'#000';
-      ctx.fillRect(x0-6,y0-6,w+12,h+12);
+      ctx.fillStyle='#05060a';
+      ctx.fillRect(0,0,w,h);
 
-      for(let y=0;y<rows;y++){
-        const row=spec[y];
+      if(!spec||!spec.length){
+        ctx.fillStyle='rgba(255,255,255,0.6)';
+        ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+        ctx.fillText('ω–L cache warming…',12,18);
+        ctx.restore();
+        this._specPanelInfo=null;
+        return;
+      }
+
+      const rows=spec.length;
+      const cols=spec.find(row=>row)?.length??0;
+      const omegaMax=Math.max(2,cols-1);
+      const totalLevels=Math.max(1,resolvedLmax-Lmin+1);
+
+      const logMin=Math.log(1);
+      const logMax=Math.log(omegaMax);
+      const logSpan=logMax-logMin||1;
+      const omegaZoom=clamp(this.specZoomOmega,1,8);
+      const omegaSpan=logSpan/omegaZoom;
+      const omegaCenter=clamp(logMin+logSpan*(0.5+this.specPanOmega),logMin+omegaSpan/2,logMax-omegaSpan/2);
+      const omegaMinLog=omegaCenter-omegaSpan/2;
+      const omegaMaxLog=omegaCenter+omegaSpan/2;
+
+      const levelZoom=clamp(this.specZoomLevel,1,8);
+      const levelSpan=totalLevels/levelZoom;
+      const levelCenter=clamp(Lmin+totalLevels*(0.5+this.specPanLevel),Lmin+levelSpan/2,resolvedLmax-levelSpan/2);
+      const levelMin=levelCenter-levelSpan/2;
+      const levelMax=levelCenter+levelSpan/2;
+
+      const omegaBins=new Int16Array(w);
+      for(let x=0;x<w;x++){
+        const u=x/(w-1);
+        const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
+        omegaBins[x]=clamp(Math.round(Math.exp(logOmega)),1,omegaMax);
+      }
+
+      const img=ctx.createImageData(w,h);
+      const data=img.data;
+      for(let y=0;y<h;y++){
+        const v=1-(y/(h-1));
+        const level=levelMin+v*(levelMax-levelMin);
+        const rowIndex=Math.round(level)-Lmin;
+        if(rowIndex<0||rowIndex>=rows){
+          continue;
+        }
+        const row=spec[rowIndex];
         if(!row) continue;
-
-        for(let x=1;x<cols;x++){
-          const v=row[x]*intensityScale;
-          if(v<=0) continue;
-
-          const intensity=Math.min(255,Math.floor(v*255));
-          ctx.fillStyle=this.whiteBg
-            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
-            : `rgb(${intensity},${intensity},${intensity})`;
-
-          ctx.fillRect(
-            x0+x*cellSize,
-            y0+y*cellSize,
-            cellSize,
-            cellSize
-          );
+        for(let x=0;x<w;x++){
+          const bin=omegaBins[x];
+          const val=row[bin]??0;
+          if(val<=0) continue;
+          const intensity=Math.pow(val,0.82);
+          const [r,g,b]=_specColorRgb(intensity);
+          const idx=(y*w+x)*4;
+          data[idx]=r;
+          data[idx+1]=g;
+          data[idx+2]=b;
+          data[idx+3]=255;
         }
       }
+      ctx.putImageData(img,0,0);
 
-      const cursorLevel=(typeof this._specReplayLevel==="number")?this._specReplayLevel:null;
-      if(cursorLevel!==null){
-        const cursorIndex=Math.round(cursorLevel)-Lmin;
-        if(cursorIndex>=0&&cursorIndex<rows){
-          const cursorY=y0+cursorIndex*cellSize;
-          ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-          ctx.lineWidth=1;
-          ctx.globalAlpha=0.85;
-          ctx.strokeRect(x0-6,cursorY-1,w+12,cellSize+2);
-        }
-      }
-
-      const resolvedBin=clamp(Math.round(this.cubeSliceBin),1,cols-1);
-      const highlightX=x0+resolvedBin*cellSize;
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-      ctx.globalAlpha=0.35;
-      ctx.beginPath();
-      ctx.moveTo(highlightX,y0-6);
-      ctx.lineTo(highlightX,y0+h+6);
-      ctx.stroke();
-
-      if(this._specReplayActive&&this._specFrames.length){
-        const idx=Math.min(this._specReplayIndex,this._specFrames.length-1);
-        const duration=Math.max(1,this._specFrames[this._specFrames.length-1]?.t ?? this._specFrames.length-1);
-        const t=Math.max(0,this._specFrames[idx]?.t ?? 0);
-        const cursorCol=Math.round((t/duration)*(cols-1));
-        const cursorX=x0+cursorCol*cellSize;
-        ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-        ctx.globalAlpha=0.25;
+      ctx.strokeStyle='rgba(255,255,255,0.08)';
+      ctx.lineWidth=1;
+      for(let omega=1;omega<=omegaMax;omega*=2){
+        const u=(Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1);
+        const x=u*w;
+        if(x<0||x>w) continue;
         ctx.beginPath();
-        ctx.moveTo(cursorX,y0-6);
-        ctx.lineTo(cursorX,y0+h+6);
+        ctx.moveTo(x,0);
+        ctx.lineTo(x,h);
         ctx.stroke();
       }
 
-      this._drawOmegaLevelCursor({x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax});
+      const levelStep=Math.max(1,Math.round(totalLevels/12));
+      ctx.strokeStyle='rgba(255,255,255,0.06)';
+      for(let L=Lmin;L<=resolvedLmax;L+=levelStep){
+        const u=(levelMax-L)/(levelMax-levelMin||1);
+        const y=u*h;
+        if(y<0||y>h) continue;
+        ctx.beginPath();
+        ctx.moveTo(0,y);
+        ctx.lineTo(w,y);
+        ctx.stroke();
+      }
 
-      ctx.globalAlpha=1;
-      ctx.fillStyle=this.whiteBg?'#000':'#fff';
-      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      const omegaValue=Number.isFinite(this.selectedOmega)?this.selectedOmega:this.cubeSliceBin;
+      const levelValue=Number.isFinite(this.selectedLevel)?this.selectedLevel:this.levels;
+      const omega=clamp(Math.round(omegaValue),1,omegaMax);
+      const level=clamp(Math.round(levelValue),Lmin,resolvedLmax);
+      const omegaX=((Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1))*w;
+      const levelY=((levelMax-level)/(levelMax-levelMin||1))*h;
+      ctx.strokeStyle='rgba(255,255,255,0.55)';
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(omegaX,0);
+      ctx.lineTo(omegaX,h);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0,levelY);
+      ctx.lineTo(w,levelY);
+      ctx.stroke();
+
       const emergence=this._detectEmergenceLevel(spec);
       const stability=this._computeStabilityScore(spec);
       const stabilityLabel=Number.isFinite(stability)?` | stability=${stability.toFixed(2)}`:'';
       const emergenceLabel=(emergence!==null)?` | emergence=L${emergence}`:'';
-      const omegaLabel=Number.isFinite(this.selectedOmega)?this.selectedOmega:this.cubeSliceBin;
-      const levelLabel=Number.isFinite(this.selectedLevel)?this.selectedLevel:this.levels;
-      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax} | sel ω${omegaLabel} L${levelLabel}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
+      ctx.fillStyle='rgba(255,255,255,0.85)';
+      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(`ω–L | k=${k+1} | L=${Lmin}-${resolvedLmax}${stabilityLabel}${emergenceLabel}`,12,18);
       ctx.restore();
+
+      this._omegaLevelPanel={
+        x0:0,y0:0,w,h,Lmin,resolvedLmax,
+        omegaMinLog,omegaMaxLog,levelMin,levelMax,omegaMax
+      };
+
+      this._specPanelInfo={
+        view:'omega-level',
+        readoutAt:(x,y)=>{
+          if(x<0||y<0||x>w||y>h) return null;
+          const u=clamp(x/w,0,1);
+          const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
+          const omegaBin=clamp(Math.round(Math.exp(logOmega)),1,omegaMax);
+          const v=1-clamp(y/h,0,1);
+          const levelBin=clamp(Math.round(levelMin+v*(levelMax-levelMin)),Lmin,resolvedLmax);
+          const rowIndex=levelBin-Lmin;
+          const row=spec[rowIndex];
+          const value=row?.[omegaBin]??0;
+          return `ω ${omegaBin} | L ${levelBin} | val ${value.toFixed(3)}`;
+        }
+      };
     }
     _drawOmegaLevelCursor({x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax}){
       const omegaValue=Number.isFinite(this.selectedOmega)?this.selectedOmega:this.cubeSliceBin;
@@ -1273,16 +1510,18 @@
     }
     _handleOmegaLevelClick(clientX,clientY){
       if(this.primaryView!=="omega-level") return;
+      if(!this.specPanelVisible) return;
       if(!this._omegaLevelPanel) return;
-      const rect=this.canvas.getBoundingClientRect();
+      if(!this.specCanvas) return;
+      const rect=this.specCanvas.getBoundingClientRect();
       const x=clientX-rect.left;
       const y=clientY-rect.top;
-      const {x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax}=this._omegaLevelPanel;
+      const {x0,y0,w,h,Lmin,resolvedLmax,omegaMinLog,omegaMaxLog,levelMin,levelMax,omegaMax}=this._omegaLevelPanel;
       if(x<x0||x>x0+w||y<y0||y>y0+h) return;
-      const localX=x-x0;
-      const localY=y-y0;
-      const omegaBin=clamp(Math.round(localX/cellSize),1,cols-1);
-      const level=clamp(Math.round(localY/cellSize)+Lmin,Lmin,resolvedLmax);
+      const u=clamp((x-x0)/w,0,1);
+      const v=1-clamp((y-y0)/h,0,1);
+      const omegaBin=clamp(Math.round(Math.exp(omegaMinLog+u*(omegaMaxLog-omegaMinLog))),1,omegaMax);
+      const level=clamp(Math.round(levelMin+v*(levelMax-levelMin)),Lmin,resolvedLmax);
       this.onOmegaLevelClick({omegaBin,level});
     }
     onOmegaLevelClick({omegaBin,level}){
@@ -1308,9 +1547,35 @@
       if(!count) return null;
       return sum/count;
     }
-    _drawLevelTimeSlice({bin=this.cubeSliceBin,cellSize=3,Lmin=1,Lmax=null}={}){
-      if(!this.showCubeSlice) return;
-      if(!this._specFrames.length) return;
+    _drawLevelTimeSpectrogram({bin=this.cubeSliceBin,Lmin=1,Lmax=null}={}){
+      if(!this.showCubeSlice){
+        const ctx=this.specCtx;
+        if(ctx){
+          ctx.save();
+          ctx.fillStyle='#05060a';
+          ctx.fillRect(0,0,this.specCanvas.width,this.specCanvas.height);
+          ctx.fillStyle='rgba(255,255,255,0.6)';
+          ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+          ctx.fillText('L–t slice disabled. Enable L×t Slice.',12,18);
+          ctx.restore();
+        }
+        this._specPanelInfo=null;
+        return;
+      }
+      if(!this._specFrames.length){
+        const ctx=this.specCtx;
+        if(ctx){
+          ctx.save();
+          ctx.fillStyle='#05060a';
+          ctx.fillRect(0,0,this.specCanvas.width,this.specCanvas.height);
+          ctx.fillStyle='rgba(255,255,255,0.6)';
+          ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+          ctx.fillText('No L–t frames recorded yet.',12,18);
+          ctx.restore();
+        }
+        this._specPanelInfo=null;
+        return;
+      }
       const frames=this._specFrames;
       const bins=frames[0]?.bins?.length;
       if(!bins) return;
@@ -1328,8 +1593,7 @@
       if(resolvedLmax<Lmin) return;
 
       const rows=resolvedLmax-Lmin+1;
-      const maxCols=160;
-      const cols=Math.min(maxCols,frames.length);
+      const cols=Math.min(240,frames.length);
       if(cols<=1) return;
 
       const grid=Array.from({length:rows},()=>new Float32Array(cols));
@@ -1348,62 +1612,76 @@
         if(val>prev) grid[row][col]=val;
         if(val>maxVal) maxVal=val;
       }
+      if(maxVal<=1e-9) maxVal=1;
 
-      const ctx=this.ctx;
-      const w=cols*cellSize;
-      const h=rows*cellSize;
-      const x0=this.canvas.clientWidth-w-16;
-      const y0=16;
+      const ctx=this.specCtx;
+      if(!ctx) return;
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
 
       ctx.save();
-      ctx.globalAlpha=0.95;
-      ctx.fillStyle=this.whiteBg?'#fff':'#000';
-      ctx.fillRect(x0-6,y0-6,w+12,h+12);
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-      ctx.strokeRect(x0-6,y0-6,w+12,h+12);
+      ctx.fillStyle='#05060a';
+      ctx.fillRect(0,0,w,h);
 
-      const scale=maxVal>0?255/maxVal:0;
-      for(let y=0;y<rows;y++){
-        const row=grid[y];
-        for(let x=0;x<cols;x++){
-          const v=row[x];
-          if(v<=0) continue;
-          const intensity=Math.min(255,Math.floor(v*scale));
-          ctx.fillStyle=this.whiteBg
-            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
-            : `rgb(${intensity},${intensity},${intensity})`;
-          ctx.fillRect(x0+x*cellSize,y0+y*cellSize,cellSize,cellSize);
+      const img=ctx.createImageData(w,h);
+      const data=img.data;
+      for(let y=0;y<h;y++){
+        const v=1-(y/(h-1));
+        const rowIndex=Math.round(v*(rows-1));
+        const row=grid[rowIndex];
+        if(!row) continue;
+        for(let x=0;x<w;x++){
+          const u=x/(w-1);
+          const col=Math.round(u*(cols-1));
+          const val=row[col]/maxVal;
+          if(val<=0) continue;
+          const [r,g,b]=_specColorRgb(Math.pow(val,0.85));
+          const idx=(y*w+x)*4;
+          data[idx]=r;
+          data[idx+1]=g;
+          data[idx+2]=b;
+          data[idx+3]=255;
         }
       }
+      ctx.putImageData(img,0,0);
 
-      if(this._specReplayActive&&this._specFrames.length){
-        const idx=Math.min(this._specReplayIndex,this._specFrames.length-1);
-        const t=Math.max(0,this._specFrames[idx]?.t ?? 0);
-        const cursorCol=Math.round((t/duration)*(cols-1));
-        const cursorX=x0+cursorCol*cellSize;
-        ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-        ctx.globalAlpha=0.75;
+      ctx.strokeStyle='rgba(255,255,255,0.08)';
+      const tStep=Math.max(1,Math.round(cols/10));
+      for(let c=0;c<=cols-1;c+=tStep){
+        const x=(c/(cols-1))*w;
         ctx.beginPath();
-        ctx.moveTo(cursorX,y0-6);
-        ctx.lineTo(cursorX,y0+h+6);
+        ctx.moveTo(x,0);
+        ctx.lineTo(x,h);
         ctx.stroke();
       }
 
-      if(typeof this._specReplayLevel==="number"){
-        const cursorRow=Math.round(this._specReplayLevel)-Lmin;
-        if(cursorRow>=0&&cursorRow<rows){
-          const cursorY=y0+cursorRow*cellSize;
-          ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-          ctx.globalAlpha=0.75;
-          ctx.strokeRect(x0-6,cursorY-1,w+12,cellSize+2);
-        }
+      const levelStep=Math.max(1,Math.round(rows/12));
+      for(let L=0;L<rows;L+=levelStep){
+        const y=(1-(L/(rows-1)))*h;
+        ctx.beginPath();
+        ctx.moveTo(0,y);
+        ctx.lineTo(w,y);
+        ctx.stroke();
       }
 
-      ctx.globalAlpha=1;
-      ctx.fillStyle=this.whiteBg?'#000':'#fff';
-      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillText(`L×t @ ω${resolvedBin} | L=${Lmin}-${resolvedLmax}`,x0,y0-10);
+      ctx.fillStyle='rgba(255,255,255,0.85)';
+      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(`L–t | ω${resolvedBin} | L=${Lmin}-${resolvedLmax}`,12,18);
       ctx.restore();
+
+      this._specPanelInfo={
+        view:'level-time',
+        readoutAt:(x,y)=>{
+          if(x<0||y<0||x>w||y>h) return null;
+          const u=clamp(x/w,0,1);
+          const col=Math.round(u*(cols-1));
+          const v=1-clamp(y/h,0,1);
+          const rowIndex=Math.round(v*(rows-1));
+          const level=Lmin+rowIndex;
+          const value=(grid[rowIndex]?.[col]??0)/maxVal;
+          return `t ${col} | L ${level} | val ${value.toFixed(3)}`;
+        }
+      };
     }
     _trackLivePeaks(mag){
       const topK=3;
@@ -1495,70 +1773,99 @@
         this._updateSpecInfo();
       }
     }
-    _drawLiveSpectrogramHUD(){
-      if(!this.liveSpecEnabled) return;
-      if(!this.emergentActive) return;
+    _drawOmegaTimeSpectrogram(){
+      const ctx=this.specCtx;
+      if(!ctx) return;
+      if(!this.liveSpecEnabled&&!this._specReplayActive){
+        ctx.save();
+        ctx.fillStyle='#05060a';
+        ctx.fillRect(0,0,this.specCanvas.width,this.specCanvas.height);
+        ctx.fillStyle='rgba(255,255,255,0.6)';
+        ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+        ctx.fillText('Live FFT disabled. Press F to enable.',12,18);
+        ctx.restore();
+        this._specPanelInfo=null;
+        return;
+      }
 
-      const ctx=this.ctx;
       const rows=this.liveSpecRows;
       const cols=this.liveSpecBins/2;
-      const cell=2;
-
-      const w=cols*cell;
-      const h=rows*cell;
-
-      const x0=16;
-      const y0=this.canvas.clientHeight-h-16;
-
-      const fMin=1;
-      const fMax=cols-1;
-      const log=(x)=>Math.log(x);
-      const lxMin=log(fMin);
-      const lxMax=log(fMax);
-      const freqToX=(c)=>{
-        const u=(log(c)-lxMin)/(lxMax-lxMin);
-        return x0+u*w;
-      };
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
 
       ctx.save();
-      ctx.globalAlpha=0.95;
+      ctx.fillStyle='rgba(5,6,10,0.18)';
+      ctx.fillRect(0,0,w,h);
 
-      ctx.fillStyle=this.whiteBg?'#fff':'#000';
-      ctx.fillRect(x0-6,y0-6,w+12,h+12);
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-      ctx.strokeRect(x0-6,y0-6,w+12,h+12);
+      const logMin=Math.log(1);
+      const logMax=Math.log(Math.max(2,cols-1));
+      const logSpan=logMax-logMin||1;
+      const omegaZoom=clamp(this.specZoomOmega,1,8);
+      const omegaSpan=logSpan/omegaZoom;
+      const omegaCenter=clamp(logMin+logSpan*(0.5+this.specPanOmega),logMin+omegaSpan/2,logMax-omegaSpan/2);
+      const omegaMinLog=omegaCenter-omegaSpan/2;
+      const omegaMaxLog=omegaCenter+omegaSpan/2;
 
-      for(let r=0;r<rows;r++){
-        const idx=(this._liveSpecHead+r)%rows;
+      const omegaBins=new Int16Array(w);
+      for(let x=0;x<w;x++){
+        const u=x/(w-1);
+        const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
+        omegaBins[x]=clamp(Math.round(Math.exp(logOmega)),1,cols-1);
+      }
+
+      const img=ctx.createImageData(w,h);
+      const data=img.data;
+      for(let y=0;y<h;y++){
+        const v=1-(y/(h-1));
+        const rowIndex=Math.round(v*(rows-1));
+        const idx=(this._liveSpecHead+rowIndex)%rows;
         const row=this._liveSpecBuf[idx];
-
-        for(let c=1;c<cols;c++){
-          const v=row[c];
-          if(v<=0) continue;
-
-          const px=freqToX(c);
-          const intensity=Math.min(255,(v*255)|0);
-          ctx.fillStyle=this.whiteBg
-            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
-            : `rgb(${intensity},${intensity},${intensity})`;
-
-          ctx.fillRect(px,y0+r*cell,cell,cell);
+        if(!row) continue;
+        for(let x=0;x<w;x++){
+          const bin=omegaBins[x];
+          const val=row[bin]??0;
+          if(val<=0) continue;
+          const [r,g,b]=_specColorRgb(Math.pow(val,0.85));
+          const offset=(y*w+x)*4;
+          data[offset]=r;
+          data[offset+1]=g;
+          data[offset+2]=b;
+          data[offset+3]=255;
         }
       }
+      ctx.putImageData(img,0,0);
 
-      ctx.globalAlpha=1;
-      ctx.fillStyle=this.whiteBg?'#000':'#fff';
-      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
-      const labelThreshold=8;
-      for(const [bin,count] of this._livePeaks.entries()){
-        if(count<labelThreshold||bin<=0||bin>=cols) continue;
-        const px=freqToX(bin);
-        ctx.fillText(`ω${bin}`,px+2,y0-4);
+      ctx.strokeStyle='rgba(255,255,255,0.08)';
+      for(let omega=1;omega<=cols-1;omega*=2){
+        const u=(Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1);
+        const x=u*w;
+        if(x<0||x>w) continue;
+        ctx.beginPath();
+        ctx.moveTo(x,0);
+        ctx.lineTo(x,h);
+        ctx.stroke();
       }
-      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillText(`Live FFT (Emergent) | k=${this.liveSpecEntityK} | bins=${cols}`,x0,y0-10);
 
+      ctx.fillStyle='rgba(255,255,255,0.85)';
+      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+      const label=`ω–t | k=${this.liveSpecEntityK+1} | bins=${cols}`;
+      ctx.fillText(label,12,18);
       ctx.restore();
+
+      this._specPanelInfo={
+        view:'omega-time',
+        readoutAt:(x,y)=>{
+          if(x<0||y<0||x>w||y>h) return null;
+          const u=clamp(x/w,0,1);
+          const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
+          const omegaBin=clamp(Math.round(Math.exp(logOmega)),1,cols-1);
+          const v=1-clamp(y/h,0,1);
+          const rowIndex=Math.round(v*(rows-1));
+          const rowIdx=(this._liveSpecHead+rowIndex)%rows;
+          const value=this._liveSpecBuf[rowIdx]?.[omegaBin]??0;
+          return `ω ${omegaBin} | t ${rowIndex} | val ${value.toFixed(3)}`;
+        }
+      };
     }
     _detectEmergenceLevel(spec){
       for(let i=0;i<spec.length;i++){
@@ -1579,6 +1886,12 @@
     }
     _fftMagnitude(signal){
       const N=signal.length;
+      if(!this._isPowerOfTwo(N)){
+        const adjusted=this._ensureFftBins(N,"FFT");
+        const resized=new Float32Array(adjusted);
+        resized.set(signal.subarray(0,Math.min(signal.length,adjusted)));
+        return this._fftMagnitude(resized);
+      }
       const re=new Float32Array(signal);
       const im=new Float32Array(N);
 
@@ -1651,6 +1964,7 @@
       const normalized=((this.activeEntityK??this.entityIndex)%n+n)%n;
       this.activeEntityK=normalized;
       this.entityIndex=normalized;
+      this.liveSpecEntityK=normalized;
       if(this.entityLabel) this.entityLabel.textContent=`Entity ${normalized+1} / ${n}`;
     }
     _stopRotationsForEntity(){
@@ -1707,6 +2021,7 @@
 
       this.entityIndex=kk;
       this.activeEntityK=kk;
+      this.liveSpecEntityK=kk;
       this.entityFocusActive=true;
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
@@ -1791,7 +2106,6 @@
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
         this._updateLiveSpectrogram(allTris);
-        this._drawLiveSpectrogramHUD();
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
@@ -1811,24 +2125,8 @@
         if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
         else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
-      if(drew&&(this.entityFocusActive||this.entityAuto||this._specReplayActive)){
-        const specEntity=this._specReplayActive
-          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.activeEntityK)
-          : this.activeEntityK;
-        const Lmax=this._specMeta?.levelsMax??this.levels;
-        if(this.primaryView!=="omega-level"){
-          this._drawEntitySpectrogram(specEntity,{Lmax});
-        }
-      }
-      if(drew&&this._specFrames.length&&this.showCubeSlice&&this.primaryView!=="omega-level"){
-        this._drawLevelTimeSlice();
-      }
-      if(drew&&this.primaryView==="omega-level"){
-        const specEntity=this._specReplayActive
-          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.activeEntityK)
-          : this.activeEntityK;
-        const Lmax=this._specMeta?.levelsMax??this.levels;
-        this._drawEntitySpectrogram(specEntity,{Lmax});
+      if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
+        this._drawEntityFFTOverlay(this.activeEntityK);
       }
     }
 
@@ -1901,6 +2199,7 @@
         this._drawFrame(0);
         this._drawnOnce=true;
       }
+      this._renderSpectrogramPanel(dtSec);
     }
     _exposeFingerprintApi(){
       window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
