@@ -134,13 +134,26 @@
         <span class="entity-label" id="entityLabel">Entity —</span>
       </div>
     </div>
+
+    <div class="group" style="grid-column: span 3;">
+      <h3>Spectrogram Sessions</h3>
+      <div class="row">
+        <button id="exportSpec" class="btn-neutral">Export Session</button>
+        <button id="importSpec" class="btn-neutral">Import Session</button>
+        <button id="replaySpec" class="btn-warning">Replay Session</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span class="status" id="specInfo">No session loaded</span>
+      </div>
+      <input id="specFileInput" type="file" accept="application/json" style="display:none" />
+    </div>
   </div>
 
   <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
 
   <footer>
     <div class="status" id="status">Ready</div>
-    <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
+    <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>e</strong> export, <strong>i</strong> import, <strong>p</strong> replay, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
   </footer>
 </div>
 
@@ -236,6 +249,8 @@
       this.panLeftBtn=document.getElementById('panLeft'); this.panRightBtn=document.getElementById('panRight'); this.panUpBtn=document.getElementById('panUp'); this.panDownBtn=document.getElementById('panDown');
       this.entityPrevBtn=document.getElementById('entityPrev'); this.entityNextBtn=document.getElementById('entityNext');
       this.entityAutoBtn=document.getElementById('entityAuto'); this.entityLockBtn=document.getElementById('entityLock'); this.entityLabel=document.getElementById('entityLabel');
+      this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
+      this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
 
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
@@ -254,6 +269,13 @@
       this._liveSpecHead=0;
       this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(this.liveSpecBins/2));
       this._livePeaks=new Map();
+      this._specFrames=[];
+      this._specMeta=null;
+      this._specRecordStart=0;
+      this._specRecording=false;
+      this._specReplayActive=false;
+      this._specReplayIndex=0;
+      this._specReplayStart=0;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -263,7 +285,7 @@
 
       this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
-      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updatePlot(true);
+      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._updatePlot(true);
       this._loop();
     }
 
@@ -331,6 +353,10 @@
       this.entityNextBtn.addEventListener('click',()=>this._advanceEntity(1));
       this.entityAutoBtn.addEventListener('click',()=>this._toggleEntityAuto());
       this.entityLockBtn.addEventListener('click',()=>this._toggleEntityLock());
+      this.exportSpecBtn.addEventListener('click',()=>this.exportSpectrogramSession());
+      this.importSpecBtn.addEventListener('click',()=>this._triggerSpecImport());
+      this.replaySpecBtn.addEventListener('click',()=>this.replaySpectrogramSession());
+      this.specFileInput.addEventListener('change',e=>this._handleSpecImportFile(e));
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
       this.canvas.addEventListener('mousedown',e=>{this.dragging=true;this.dragStart=[e.clientX,e.clientY]});
       window.addEventListener('mousemove',e=>{if(!this.dragging)return; const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1]; this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render()});
@@ -344,6 +370,13 @@
           if(e.key.toLowerCase()==='f'){
             this.liveSpecEnabled=!this.liveSpecEnabled;
             this._statusMsg(this.liveSpecEnabled?"Live FFT: ON (Emergent)":"Live FFT: OFF");
+            if(this.liveSpecEnabled){
+              if(this.emergentActive) this._startSpectrogramRecording();
+            } else {
+              this._specRecording=false;
+              this._specReplayActive=false;
+              this._updateSpecInfo();
+            }
             this._render();
             return;
           }
@@ -351,6 +384,18 @@
             this.liveSpecEntityK=(this.liveSpecEntityK+1)%this.sides;
             this._statusMsg(`Live FFT entity k = ${this.liveSpecEntityK}`);
             this._render();
+            return;
+          }
+          if(e.key.toLowerCase()==='e'){
+            this.exportSpectrogramSession();
+            return;
+          }
+          if(e.key.toLowerCase()==='i'){
+            this._triggerSpecImport();
+            return;
+          }
+          if(e.key.toLowerCase()==='p'){
+            this.replaySpectrogramSession();
             return;
           }
         }
@@ -391,8 +436,16 @@
     }
     _toggleEmergent(){
       if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
-      if(this.emergentActive){this.emergentActive=false; this.emergentPaused=false; this.snapMode=0; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"}
-      else{this.emergentActive=true; this.rotationActive=false; this.snapMode=2; this.toggleRotationBtn.textContent="Start Rotation"; this.toggleEmergentBtn.textContent="Stop Emergent Rotation"; this.pauseEmergentBtn.disabled=false; this._lastFrameTs=performance.now()}
+      if(this.emergentActive){
+        this.emergentActive=false; this.emergentPaused=false; this.snapMode=0; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent";
+        this._specRecording=false;
+        this._specReplayActive=false;
+        this._updateSpecInfo();
+      }
+      else{
+        this.emergentActive=true; this.rotationActive=false; this.snapMode=2; this.toggleRotationBtn.textContent="Start Rotation"; this.toggleEmergentBtn.textContent="Stop Emergent Rotation"; this.pauseEmergentBtn.disabled=false; this._lastFrameTs=performance.now();
+        if(this.liveSpecEnabled) this._startSpectrogramRecording();
+      }
       this._updateButtonsEnabled(); this._updateHeaderLabels(); this._updateStatus(); this._render();
       this._updateSnapLabel();
     }
@@ -417,6 +470,131 @@
         if(this.canvas.toBlob){this.canvas.toBlob((blob)=>{if(!blob){trigger(this.canvas.toDataURL('image/png'),false);return}trigger(URL.createObjectURL(blob),true)},'image/png')}
         else{trigger(this.canvas.toDataURL('image/png'),false)}
       }catch(err){console.error('PNG download failed:',err); this._statusMsg('PNG download failed — check console for details.')}
+    }
+
+    exportSpectrogramSession(){
+      if(!this._specFrames.length){
+        this._statusMsg("No spectrogram frames recorded yet.");
+        return;
+      }
+
+      const bins=this.liveSpecBins/2;
+      const payload={
+        version:"hlsf-spec-v1",
+        createdAt:new Date().toISOString(),
+        entityK:this.liveSpecEntityK,
+        levels:this.levels,
+        sides:this.sides,
+        bins,
+        frames:this._specFrames.map(f=>({t:f.t,fft:Array.from(f.bins)}))
+      };
+
+      const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download=`hlsf_entity${payload.entityK}_L${payload.levels}.json`;
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),200);
+      this._statusMsg(`Exported spectrogram session (${this._specFrames.length} frames).`);
+    }
+
+    importSpectrogramSession(json){
+      const data=JSON.parse(json);
+      if(!data||!Array.isArray(data.frames)){
+        this._statusMsg("Invalid spectrogram session JSON.");
+        return;
+      }
+
+      const binsHalf=Number(data.bins)||0;
+      if(binsHalf>0) this._resetLiveSpecBuffer(binsHalf);
+
+      this._specFrames=data.frames.map(f=>({
+        t:f.t,
+        bins:Float32Array.from(f.fft)
+      }));
+
+      this._specMeta={
+        entityK:typeof data.entityK==="number"?data.entityK:this.liveSpecEntityK,
+        levels:typeof data.levels==="number"?data.levels:this.levels,
+        sides:typeof data.sides==="number"?data.sides:this.sides,
+        bins:binsHalf>0?binsHalf:(this.liveSpecBins/2)
+      };
+
+      if(typeof this._specMeta.entityK==="number") this.liveSpecEntityK=this._specMeta.entityK;
+      this._specRecording=false;
+      this._specReplayActive=false;
+      this._updateSpecInfo();
+      this._statusMsg(`Loaded spectrogram session (${this._specFrames.length} frames).`);
+      this._render();
+    }
+
+    replaySpectrogramSession(){
+      if(!this._specFrames.length){
+        this._statusMsg("No spectrogram session loaded to replay.");
+        return;
+      }
+      const binsHalf=this._specMeta?.bins||this._specFrames[0]?.bins?.length||this.liveSpecBins/2;
+      this._resetLiveSpecBuffer(binsHalf);
+      if(this._specMeta?.entityK!==undefined) this.liveSpecEntityK=this._specMeta.entityK;
+      this.liveSpecEnabled=true;
+      this._specReplayActive=true;
+      this._specReplayIndex=0;
+      this._specReplayStart=performance.now();
+      this._livePeaks.clear();
+      this._statusMsg(`Replaying spectrogram session (${this._specFrames.length} frames).`);
+      this._render();
+    }
+
+    _triggerSpecImport(){
+      if(this.specFileInput) this.specFileInput.click();
+    }
+
+    _handleSpecImportFile(e){
+      const file=e.target?.files?.[0];
+      if(!file) return;
+      const reader=new FileReader();
+      reader.onload=() => {
+        try{
+          this.importSpectrogramSession(String(reader.result||""));
+        }catch(err){
+          console.error("Import failed:",err);
+          this._statusMsg("Import failed — invalid JSON.");
+        }
+      };
+      reader.readAsText(file);
+      e.target.value="";
+    }
+
+    _resetLiveSpecBuffer(binsHalf){
+      const nextBins=Math.max(2,(binsHalf|0));
+      this.liveSpecBins=nextBins*2;
+      this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(nextBins));
+      this._liveSpecHead=0;
+      this._livePeaks.clear();
+    }
+
+    _startSpectrogramRecording(){
+      this._specFrames=[];
+      this._specRecordStart=performance.now();
+      this._specRecording=true;
+      this._specReplayActive=false;
+      this._specMeta={
+        entityK:this.liveSpecEntityK,
+        levels:this.levels,
+        sides:this.sides,
+        bins:this.liveSpecBins/2
+      };
+      this._updateSpecInfo();
+    }
+
+    _updateSpecInfo(){
+      if(!this.specInfoEl) return;
+      if(!this._specFrames.length){
+        this.specInfoEl.textContent=this._specRecording?"Recording... (0 frames)":"No session loaded";
+        return;
+      }
+      const bins=this._specMeta?.bins??(this.liveSpecBins/2);
+      this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
     }
 
     _updateButtonsEnabled(){this.viewPortalBtn.disabled=this.levels<1; this.pauseEmergentBtn.disabled=!this.emergentActive; const step=this.emergentActive&&this.emergentPaused; this.stepBackBtn.disabled=!step; this.stepForwardBtn.disabled=!step}
@@ -661,6 +839,23 @@
 
       ctx.restore();
     }
+    _trackLivePeaks(mag){
+      const topK=3;
+      const peaks=[...mag.entries()]
+        .slice(1)
+        .sort((a,b)=>b[1]-a[1])
+        .slice(0,topK);
+      const peakBins=new Set(peaks.map(([bin])=>bin));
+      for(const [bin] of peaks){
+        this._livePeaks.set(bin,(this._livePeaks.get(bin)||0)+1);
+      }
+      for(const [bin,count] of this._livePeaks.entries()){
+        if(peakBins.has(bin)) continue;
+        const next=count-1;
+        if(next<=0) this._livePeaks.delete(bin);
+        else this._livePeaks.set(bin,next);
+      }
+    }
     _updateLiveSpectrogram(tris){
       if(!this.liveSpecEnabled) return;
       if(!this.emergentActive) return;
@@ -668,6 +863,22 @@
       const now=performance.now();
       if(now-this._liveSpecLastTs<this.liveSpecEveryMs) return;
       this._liveSpecLastTs=now;
+
+      if(this._specReplayActive){
+        while(this._specReplayIndex<this._specFrames.length){
+          const frame=this._specFrames[this._specReplayIndex];
+          if((now-this._specReplayStart)<frame.t) break;
+          this._liveSpecBuf[this._liveSpecHead].set(frame.bins);
+          this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
+          this._trackLivePeaks(frame.bins);
+          this._specReplayIndex+=1;
+        }
+        if(this._specReplayIndex>=this._specFrames.length){
+          this._specReplayActive=false;
+          this._statusMsg("Spectrogram replay complete.");
+        }
+        return;
+      }
 
       const bins=this.liveSpecBins;
       const k=((this.liveSpecEntityK%this.sides)+this.sides)%this.sides;
@@ -689,24 +900,18 @@
         for(let i=1;i<mag.length;i++) mag[i]/=mx;
       }
 
-      const topK=3;
-      const peaks=[...mag.entries()]
-        .slice(1)
-        .sort((a,b)=>b[1]-a[1])
-        .slice(0,topK);
-      const peakBins=new Set(peaks.map(([bin])=>bin));
-      for(const [bin] of peaks){
-        this._livePeaks.set(bin,(this._livePeaks.get(bin)||0)+1);
-      }
-      for(const [bin,count] of this._livePeaks.entries()){
-        if(peakBins.has(bin)) continue;
-        const next=count-1;
-        if(next<=0) this._livePeaks.delete(bin);
-        else this._livePeaks.set(bin,next);
-      }
+      this._trackLivePeaks(mag);
 
       this._liveSpecBuf[this._liveSpecHead].set(mag);
       this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
+
+      if(this._specRecording){
+        this._specFrames.push({
+          t:Math.round(now-this._specRecordStart),
+          bins:Float32Array.from(mag)
+        });
+        this._updateSpecInfo();
+      }
     }
     _drawLiveSpectrogramHUD(){
       if(!this.liveSpecEnabled) return;
