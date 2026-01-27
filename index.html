@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDCo HLSF Engine Visualizer (Web)</title>
+  <style>
+    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; }
+    :root {
+      --btn-fg:#e9e9e9; --btn-bg:#1c1c1c; --btn-bg-h:#242424; --btn-bd:#2a2a2a;
+      --primary:#3aa5ff; --primary-h:#2e83cc; --primary-bd:#1f5e91;
+      --success:#22c55e; --success-h:#19924a; --success-bd:#116d37;
+      --warning:#f59e0b; --warning-h:#c47c09; --warning-bd:#8f5b06;
+      --danger:#ef4444; --danger-h:#c03636; --danger-bd:#8f2828;
+      --neutral:#374151; --neutral-h:#4b5563; --neutral-bd:#1f2937;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
+    .app{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100%}
+    @supports(height:100dvh){.app{height:100dvh}}
+    header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+    footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+    .controls{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+    .group{border:1px solid var(--border);border-radius:10px;padding:10px;background:#0f0f0f}
+    .group h3{margin:0 0 8px;font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+    .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+    input[type="number"],input[type="text"]{background:#111;color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 9px;width:90px;text-align:center}
+    button{background:var(--btn-bg);color:var(--btn-fg);border:1px solid var(--btn-bd);border-radius:8px;padding:7px 10px;cursor:pointer;white-space:nowrap;transition:background .15s ease,border-color .15s ease,transform .03s ease}
+    button:hover{background:var(--btn-bg-h)} button:active{transform:translateY(1px)} button:disabled{opacity:.55;cursor:not-allowed}
+    .btn-primary{background:var(--primary);border-color:var(--primary-bd);color:#0b0b0b}.btn-primary:hover{background:var(--primary-h)}
+    .btn-success{background:var(--success);border-color:var(--success-bd);color:#0b0b0b}.btn-success:hover{background:var(--success-h)}
+    .btn-warning{background:var(--warning);border-color:var(--warning-bd);color:#0b0b0b}.btn-warning:hover{background:var(--warning-h)}
+    .btn-danger{background:var(--danger);border-color:var(--danger-bd);color:#0b0b0b}.btn-danger:hover{background:var(--danger-h)}
+    .btn-neutral{background:var(--neutral);border-color:var(--neutral-bd);color:#e9e9e9}.btn-neutral:hover{background:var(--neutral-h)}
+    [aria-pressed="true"].btn-primary,[aria-pressed="true"].btn-success,[aria-pressed="true"].btn-warning,[aria-pressed="true"].btn-danger,[aria-pressed="true"].btn-neutral{filter:saturate(1.1) brightness(.95);box-shadow:inset 0 0 0 9999px rgba(0,0,0,.08)}
+    .levels{display:flex;flex-wrap:wrap;gap:6px}.lvl-btn{min-width:32px;text-align:center}.lvl-btn.active{outline:2px solid var(--accent)}
+    .code-label{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:13px;color:var(--accent);padding:4px 8px;background:#0f0f0f;border-radius:8px;border:1px solid var(--border);max-width:100%;overflow:hidden;text-overflow:ellipsis}
+    .code-stack{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
+    .help{color:var(--muted)} .status{color:var(--muted)}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
+      <div class="code-stack">
+        <div class="code-label" id="codeLabel">—</div>
+        <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="group" style="grid-column: span 3;">
+      <h3>Dimension & Level</h3>
+      <div class="row">
+        <label for="sidesInput">n (sides):</label>
+        <input id="sidesInput" type="number" min="4" step="1" value="12" />
+        <button id="nMinus">n −1</button>
+        <button id="nPlus">n +1</button>
+        <button id="updatePlot">Update Plot</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span>Level:</span>
+        <div class="levels" id="levelButtons"></div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="cancelGen">Cancel Generation</button>
+      </div>
+    </div>
+
+    <div class="group" style="grid-column: span 3;">
+      <h3>Appearance</h3>
+      <div class="row">
+        <label for="alphaInput">Alpha (α):</label>
+        <input id="alphaInput" type="number" min="0" max="1" step="0.0001" value="0.02" />
+        <button id="applyAlpha">Apply α</button>
+        <button id="autoAlpha">Auto α</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span>Overlayed α:</span>
+        <span id="overlayAlpha">—</span>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="toggleEdges" class="btn-neutral">Show Colors</button>
+        <button id="colorMode" class="btn-neutral">Color Mode</button>
+        <button id="toggleBg" class="btn-neutral" aria-pressed="true">BG: White</button>
+      </div>
+    </div>
+
+    <div class="group" style="grid-column: span 3;">
+      <h3>Rotation</h3>
+      <!-- NEW: rotation speed field -->
+      <div class="row" style="margin-bottom:8px;">
+        <label for="speedInput">Speed:</label>
+        <input id="speedInput" type="number" min="0.001" max="10" step="0.001" value="0.50" />
+      </div>
+      <div class="row">
+        <button id="speedPlus">Speed +</button>
+        <button id="speedMinus">Speed −</button>
+        <button id="toggleRotation" class="btn-primary">Start Rotation</button>
+        <button id="toggleEmergent" class="btn-success">Emergent Rotation</button>
+        <button id="pauseEmergent" class="btn-warning" disabled>Pause Emergent</button>
+        <button id="stepBack" class="btn-neutral" title="Step Back (,) " disabled>Step ◀</button>
+        <button id="stepForward" class="btn-neutral" title="Step Forward (.)" disabled>Step ▶</button>
+      </div>
+    </div>
+
+    <div class="group" style="grid-column: span 3;">
+      <h3>View</h3>
+      <div class="row">
+        <button id="zoomIn">Zoom In</button>
+        <button id="zoomOut">Zoom Out</button>
+        <button id="resetView">Reset View</button>
+        <button id="viewPortal">View Portal</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="panLeft">◀️</button>
+        <button id="panRight">▶️</button>
+        <button id="panUp">▲</button>
+        <button id="panDown">▼</button>
+        <button id="downloadPng" type="button" style="margin-left:auto;"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
+
+  <footer>
+    <div class="status" id="status">Ready</div>
+    <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
+  </footer>
+</div>
+
+<script>
+(()=> {
+  const TAU=Math.PI*2, clamp=(v,a,b)=>Math.min(b,Math.max(a,v)), canonicalStartAngle=(n)=> (n%2 ? Math.PI/2 : 0);
+
+  function hsvToRgb(h,s,v){let r=0,g=0,b=0,i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);switch(i%6){case 0:r=v;g=t;b=p;break;case 1:r=q;g=v;b=p;break;case 2:r=p;g=v;b=t;break;case 3:r=p;g=q;b=v;break;case 4:r=t;g=p;b=v;break;case 5:r=v;g=p;b=q;break}return[Math.round(r*255),Math.round(g*255),Math.round(b*255)]}
+  const rgbaStr=(r,g,b,a)=>`rgba(${r},${g},${b},${a})`;
+  function buildHsvPalette(n,s=.85,v=.95){const out=[],count=Math.max(1,n|0);for(let i=0;i<count;i++){const [r,g,b]=hsvToRgb(i/count,s,v);out.push([r,g,b,1])}return out}
+
+  function polygonVertices(center,radius,sides){
+    const [cx,cy]=center, start=canonicalStartAngle(sides), arr=[];
+    for(let i=0;i<sides;i++){const a=start+i*TAU/sides;arr.push([cx+radius*Math.cos(a),cy+radius*Math.sin(a)])}
+    return arr;
+  }
+
+  const multiplier=(level,sides)=>(sides%2===0)?Math.pow(2,level-2):Math.pow(1.5,level-2);
+
+  function calculateSymmetryPointAdjusted(center,radius,sides,level){
+    const [cx,cy]=center; if(level<=1) return [cx,cy,0];
+    const base=canonicalStartAngle(sides), half=(sides%2===1)?(Math.PI/sides):0, ang=base+half;
+    const rf=(sides%2===1)?Math.cos(Math.PI/sides):1;
+    let dist=0; for(let cur=2;cur<=level;cur++) dist+=radius*multiplier(cur,sides)*rf;
+    return [cx+Math.cos(ang)*dist, cy+Math.sin(ang)*dist, 0];
+  }
+
+  function buildBaseTriangles(vertices,sides){
+    const tris=[], limit=(sides%2)?(Math.floor(sides/2)+2):(Math.floor(sides/2)+1), i=0;
+    for(let j=2;j<limit;j++){const a=vertices[i], b=vertices[(i+j)%sides], c=vertices[(i+j-1)%sides]; tris.push([a,b,c])}
+    return tris;
+  }
+
+  function rotatePointAround(p,pivot,th){const[px,py]=p,[cx,cy]=pivot,dx=px-cx,dy=py-cy,ct=Math.cos(th),st=Math.sin(th);return[ct*dx-st*dy+cx,st*dx+ct*dy+cy]}
+  function rotateTrianglesAround(tris,pivot,th){const out=new Array(tris.length);for(let t=0;t<tris.length;t++){const tri=tris[t];out[t]=[rotatePointAround(tri[0],pivot,th),rotatePointAround(tri[1],pivot,th),rotatePointAround(tri[2],pivot,th)]}return out}
+  function trianglesCenters(tris){const c=new Array(tris.length);for(let i=0;i<tris.length;i++){const[a,b,d]=tris[i];c[i]=[(a[0]+b[0]+d[0])/3,(a[1]+b[1]+d[1])/3]}return c}
+  function totalReplications(sides,levels){if(levels<=0)return 0;if(sides===1)return levels;return Math.floor((sides*(Math.pow(sides,levels)-1))/(sides-1))}
+
+  class HLSFGenerator{
+    constructor(center=[0,0],radius=1,sides=8,levels=2){
+      this.center=center.slice(); this.radius=radius; this.sides=sides; this.levels=levels;
+      this.vertices=polygonVertices(this.center,this.radius,this.sides);
+      this.level_seed_tris={}; this.level_tris={}; this.level_seed_centers={}; this.level_symmetry={};
+      this.computeLevels();
+    }
+    setSides(n){this.sides=n; this.vertices=polygonVertices(this.center,this.radius,this.sides)}
+    setLevels(L){this.levels=L}
+    computeLevels(opts={}){
+      const deferAtLevel=opts.deferAtLevel??null;
+      this.vertices=polygonVertices(this.center,this.radius,this.sides);
+      const baseTris=buildBaseTriangles(this.vertices,this.sides);
+      this.level_seed_tris={}; this.level_tris={}; this.level_seed_centers={}; this.level_symmetry={};
+      this.level_seed_tris[0]=baseTris.map(t=>t.map(p=>p.slice()));
+      this.level_seed_centers[0]=trianglesCenters(this.level_seed_tris[0]);
+      this.level_tris[0]=baseTris.map(t=>t.map(p=>p.slice()));
+      let current=[];
+      if(this.level_seed_tris[0].length){for(let i=0;i<this.sides;i++){const ang=(TAU/this.sides)*i; current=current.concat(rotateTrianglesAround(this.level_seed_tris[0],this.center,ang))}}
+      this.level_seed_tris[1]=this.level_tris[0].map(t=>t.map(p=>p.slice()));
+      this.level_seed_centers[1]=trianglesCenters(this.level_seed_tris[1]);
+      this.level_tris[1]=current.map(t=>t.map(p=>p.slice()));
+      for(let lvl=2;lvl<=this.levels;lvl++){
+        const sp3=calculateSymmetryPointAdjusted(this.center,this.radius,this.sides,lvl);
+        this.level_symmetry[lvl]=[sp3[0],sp3[1]];
+        this.level_seed_tris[lvl]=current.map(t=>t.map(p=>p.slice()));
+        this.level_seed_centers[lvl]=trianglesCenters(this.level_seed_tris[lvl]);
+        if(deferAtLevel===lvl){ this.level_tris[lvl]=null; break; }
+        const copies=[this.level_seed_tris[lvl]];
+        for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(this.level_seed_tris[lvl],this.level_symmetry[lvl],ang))}
+        current=copies.flat();
+        this.level_tris[lvl]=current.map(t=>t.map(p=>p.slice()));
+      }
+    }
+    activeTriangles(){const L=Math.max(0,this.levels|0);const tris=this.level_tris[L];return(tris&&tris.length)?tris:[]}
+    activeSeedTris(){const L=Math.max(0,this.levels|0);return(this.level_seed_tris[L]??[])}
+    activeCenters(){const L=Math.max(0,this.levels|0);return(this.level_seed_centers[L]??[])}
+    activePivot(){const L=Math.max(0,this.levels|0);return(L<=1?this.center:(this.level_symmetry[L]??this.center))}
+  }
+
+  class App{
+    constructor(){
+      this.canvas=document.getElementById('canvas'); this.wrap=document.getElementById('canvasWrap'); this.ctx=this.canvas.getContext('2d');
+      this.deferThreshold=400000;
+      this.sidesInput=document.getElementById('sidesInput'); this.nMinus=document.getElementById('nMinus'); this.nPlus=document.getElementById('nPlus'); this.updateBtn=document.getElementById('updatePlot'); this.levelButtons=document.getElementById('levelButtons'); this.cancelBtn=document.getElementById('cancelGen');
+      this.alphaInput=document.getElementById('alphaInput'); this.applyAlphaBtn=document.getElementById('applyAlpha'); this.autoAlphaBtn=document.getElementById('autoAlpha'); this.overlayAlpha=document.getElementById('overlayAlpha');
+      this.toggleEdgesBtn=document.getElementById('toggleEdges'); this.colorModeBtn=document.getElementById('colorMode'); this.toggleBgBtn=document.getElementById('toggleBg');
+      this.speedInput=document.getElementById('speedInput');
+      this.speedPlus=document.getElementById('speedPlus'); this.speedMinus=document.getElementById('speedMinus'); this.toggleRotationBtn=document.getElementById('toggleRotation'); this.toggleEmergentBtn=document.getElementById('toggleEmergent'); this.pauseEmergentBtn=document.getElementById('pauseEmergent');
+      this.stepBackBtn=document.getElementById('stepBack'); this.stepForwardBtn=document.getElementById('stepForward');
+      this.stepBackBtn.addEventListener('click',()=>this._emergentStep(-1)); this.stepForwardBtn.addEventListener('click',()=>this._emergentStep(+1));
+      this.zoomInBtn=document.getElementById('zoomIn'); this.zoomOutBtn=document.getElementById('zoomOut'); this.resetViewBtn=document.getElementById('resetView'); this.viewPortalBtn=document.getElementById('viewPortal');
+      this.panLeftBtn=document.getElementById('panLeft'); this.panRightBtn=document.getElementById('panRight'); this.panUpBtn=document.getElementById('panUp'); this.panDownBtn=document.getElementById('panDown');
+      this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
+
+      this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
+      this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
+      this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
+      this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
+      this.fps=0; this._lastFrameTs=performance.now();
+      this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
+      this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
+
+      this.sidesInput.value=String(this.sides);
+      if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
+
+      this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
+      this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
+      this._updateButtonsEnabled(); this._updatePlot(true);
+      this._loop();
+    }
+
+    _drawDeferred(seed,pivot,extraAngleRad=0){
+      const [px,py]=pivot,[xmin,ymin,xmax,ymax]=this._worldViewRect(),corners=[[xmin,ymin],[xmin,ymax],[xmax,ymin],[xmax,ymax]];
+      let Rmin=Infinity,Rmax=0; for(const c of corners){const d=Math.hypot(c[0]-px,c[1]-py); if(d<Rmin)Rmin=d; if(d>Rmax)Rmax=d}
+      const pad=(Rmax-Rmin)*.25+.01; Rmin=Math.max(0,Rmin-pad); Rmax=Rmax+pad;
+      const lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+      let colorBySeed=null; if(!this.edgesOnly){const pal=buildHsvPalette(seed.length), a=this.alpha*Math.pow(.82,Math.max(0,this.levels-1)); colorBySeed=pal.map(([r,g,b,_])=>rgbaStr(r,g,b,a))}
+      const triRadiusRange=(tri)=>{let r0=Infinity,r1=0; for(const p of tri){const d=Math.hypot(p[0]-px,p[1]-py); if(d<r0)r0=d; if(d>r1)r1=d} return[r0,r1]};
+      const sides=this.sides;
+      for(let si=0;si<seed.length;si++){
+        const tri=seed[si],[r0,r1]=triRadiusRange(tri); if(r1<Rmin||r0>Rmax) continue;
+        const fill=this.edgesOnly?null:colorBySeed[si%colorBySeed.length];
+        for(let i=0;i<sides;i++){const ang=extraAngleRad+(TAU/sides)*i; const triRot=[rotatePointAround(tri[0],pivot,ang),rotatePointAround(tri[1],pivot,ang),rotatePointAround(tri[2],pivot,ang)]; this._drawTriangle(triRot,fill,stroke,lw)}
+      }
+    }
+
+    _screenToWorld([sx,sy]){const x=(sx-this.tx)/(200*this.scale), y=-(sy-this.ty)/(200*this.scale); return[x,y]}
+    _worldViewRect(){const w=this.canvas.clientWidth,h=this.canvas.clientHeight,p0=this._screenToWorld([0,0]),p1=this._screenToWorld([w,h]);return[Math.min(p0[0],p1[0]),Math.min(p0[1],p1[1]),Math.max(p0[0],p1[0]),Math.max(p0[1],p1[1])]}
+    _estimateTriangles(n,L){const t0=(n%2===0)?Math.floor(n/2):Math.floor(n/2)+1; if(L<=0) return t0; return t0*Math.pow(n,L)}
+    _isPortalZoomed(){const [xmin,ymin,xmax,ymax]=this._worldViewRect(); return Math.hypot(xmax-xmin,ymax-ymin)<1.25 }
+
+    _render(){ this._drawFrame(0); this._updateStatus(); this._drawnOnce=true }
+
+    _buildLevelButtons(){ this.levelButtons.innerHTML=''; for(let L=0;L<=10;L++){const b=document.createElement('button'); b.className='lvl-btn'; b.textContent=String(L); if(L===this.levels)b.classList.add('active'); b.addEventListener('click',()=>this.setLevel(L)); this.levelButtons.appendChild(b)}}
+    _markActiveLevel(){[...this.levelButtons.children].forEach((el,i)=>el.classList.toggle('active',i===this.levels))}
+
+    _bindEvents(){
+      window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
+      this.nMinus.addEventListener('click',()=>this._bumpSides(-1));
+      this.nPlus.addEventListener('click',()=>this._bumpSides(+1));
+      this.updateBtn.addEventListener('click',()=>this._applySidesFromInput());
+      this.cancelBtn.addEventListener('click',()=>this._statusMsg("Generation cancelled."));
+      this.applyAlphaBtn.addEventListener('click',()=>this._applyAlpha());
+      this.autoAlphaBtn.addEventListener('click',()=>this._autoAlpha());
+      this.toggleEdgesBtn.addEventListener('click',()=>this._toggleEdges());
+      this.colorModeBtn.addEventListener('click',()=>this._toggleColorMode());
+      this.toggleBgBtn.addEventListener('click',()=>this._toggleBg());
+
+      // Rotation speed controls + sync
+      this.speedPlus.addEventListener('click',()=>{this.rotationSpeed=Math.min(10,this.rotationSpeed+0.1);this._syncSpeedField();this._updateStatus()});
+      this.speedMinus.addEventListener('click',()=>{this.rotationSpeed=Math.max(0.001,this.rotationSpeed-0.1);this._syncSpeedField();this._updateStatus()});
+      if (this.speedInput){
+        this.speedInput.addEventListener('change',()=>this._applySpeedFromInput());
+        this.speedInput.addEventListener('blur',()=>this._applySpeedFromInput());
+      }
+
+      this.toggleRotationBtn.addEventListener('click',()=>this._toggleRotation());
+      this.toggleEmergentBtn.addEventListener('click',()=>this._toggleEmergent());
+      this.pauseEmergentBtn.addEventListener('click',()=>this._togglePauseEmergent());
+      this.zoomInBtn.addEventListener('click',()=>this._zoomAtCanvasPoint(1.1));
+      this.zoomOutBtn.addEventListener('click',()=>this._zoomAtCanvasPoint(0.9));
+      this.resetViewBtn.addEventListener('click',()=>this._resetView());
+      this.viewPortalBtn.addEventListener('click',()=>this._viewPortal());
+      this.panLeftBtn.addEventListener('click',()=>{this.tx-=50;this._render()});
+      this.panRightBtn.addEventListener('click',()=>{this.tx+=50;this._render()});
+      this.panUpBtn.addEventListener('click',()=>{this.ty-=50;this._render()});
+      this.panDownBtn.addEventListener('click',()=>{this.ty+=50;this._render()});
+      this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
+      this.canvas.addEventListener('mousedown',e=>{this.dragging=true;this.dragStart=[e.clientX,e.clientY]});
+      window.addEventListener('mousemove',e=>{if(!this.dragging)return; const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1]; this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render()});
+      window.addEventListener('mouseup',()=>{this.dragging=false});
+      this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
+      window.addEventListener('keydown',e=>{
+        if(e.key==='ArrowLeft')this.tx-=50; else if(e.key==='ArrowRight')this.tx+=50; else if(e.key==='ArrowUp')this.ty-=50; else if(e.key==='ArrowDown')this.ty+=50; else if(e.key.toLowerCase()==='r')this._resetView();
+        const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
+        if(!typing&&this.emergentActive&&this.emergentPaused){ if(e.key===','){this._emergentStep(-1);e.preventDefault();return} if(e.key==='.') {this._emergentStep(+1);e.preventDefault();return}}
+        this._render();
+      });
+    }
+
+    _resizeCanvas(){
+      const dpr=Math.max(1,window.devicePixelRatio||1), w=this.wrap.clientWidth||window.innerWidth, footer=document.querySelector('footer'), fh=footer?footer.getBoundingClientRect().height:0, h=(window.innerHeight-this.wrap.getBoundingClientRect().top-fh)|0;
+      this.canvas.width=Math.max(1,(w*dpr)|0); this.canvas.height=Math.max(1,(h*dpr)|0);
+      this.canvas.style.width=w+'px'; this.canvas.style.height=h+'px';
+      this.ctx.setTransform(1,0,0,1,0,0); this.ctx.scale(dpr,dpr);
+    }
+
+    _bumpSides(d){const cur=parseInt(this.sidesInput.value||this.sides,10), n=Math.max(4,cur+d); this.sidesInput.value=String(n); this._applySides(n)}
+    _applySidesFromInput(){const n=Math.max(4,parseInt(this.sidesInput.value||this.sides,10)); this._applySides(n)}
+    _applySides(n){this.sides=n; this.gen.setSides(n); this._popupShown=false; this._updatePlot(true); this._autoAlphaIfColors(); this._updateButtonsEnabled()}
+
+    setLevel(L){
+      this.levels=L; this.gen.setLevels(L); this._popupShown=false;
+      if(this.levels===0){this.edgesOnly=true; this.whiteBg=true; this.alpha=0.34; this.toggleEdgesBtn.textContent="Show Colors"} else {this._autoAlphaIfColors()}
+      this._updatePlot(true); if(L>=3)this._viewPortal();
+      this._updateButtonsEnabled(); this._markActiveLevel();
+    }
+
+    _applyAlpha(){const a=parseFloat(this.alphaInput.value); if(!isFinite(a)||a<0||a>1)return; this.alpha=a; this._updatePlot(true)}
+    _autoAlpha(){const K=totalReplications(this.sides,this.levels); let opt=this.edgesOnly?this.alpha:(K>0?(3.636/K):this.alpha); this.alpha=clamp(opt,0.01,1); this.alphaInput.value=this.alpha.toFixed(4); this._updatePlot(true)}
+    _autoAlphaIfColors(){if(!this.edgesOnly)this._autoAlpha()}
+    _toggleEdges(){this.edgesOnly=!this.edgesOnly; if(this.edgesOnly){this.alpha=.5; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true}else{this.toggleEdgesBtn.textContent="Show Outlines"; this._autoAlpha(); this.whiteBg=false} this._applyBg(); this._updatePlot(true); this._updateButtonsEnabled()}
+    _toggleColorMode(){if(this.edgesOnly){this.edgesOnly=false; this.toggleEdgesBtn.textContent="Show Outlines"; this.whiteBg=false; this._applyBg()} this.colorMode=(this.colorMode==='by_level')?'distinct':'by_level'; this._autoAlpha(); this._updatePlot(true)}
+    _toggleRotation(){if(this.rotationActive){this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"} else {this.rotationActive=true; this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"; this.toggleRotationBtn.textContent="Stop Rotation"}}
+    _toggleEmergent(){
+      if(this.emergentActive){this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"}
+      else{this.emergentActive=true; this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"; this.toggleEmergentBtn.textContent="Stop Emergent Rotation"; this.pauseEmergentBtn.disabled=false; this._lastFrameTs=performance.now()}
+      this._updateButtonsEnabled(); this._updateHeaderLabels(); this._updateStatus(); this._render();
+    }
+    _togglePauseEmergent(){if(!this.emergentActive)return; this.emergentPaused=!this.emergentPaused; this.pauseEmergentBtn.textContent=this.emergentPaused?"Resume Emergent":"Pause Emergent"; this.stepBackBtn.disabled=!this.emergentPaused; this.stepForwardBtn.disabled=!this.emergentPaused}
+    _applyBg(){this.wrap.style.background=this.whiteBg?'#fff':'#000'; this.toggleBgBtn.setAttribute('aria-pressed',String(this.whiteBg)); this.toggleBgBtn.textContent=this.whiteBg?"BG: White":"BG: Black"}
+    _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
+    _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render()}
+    _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
+    _resetView(){this._zoomToDesignExtent(); this._render()}
+    _viewPortal(){
+      if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
+      const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
+      let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
+      if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
+      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._render();
+    }
+    _downloadPng(){
+      try{
+        this._render();
+        const fn=`pdco_hlsf_fft__n${this.sides}_L${this.levels}.png`, a=document.createElement('a'); a.style.display='none';
+        const trigger=(url,isBlob)=>{a.href=url;a.download=fn;a.target='_blank';a.rel='noopener';document.body.appendChild(a);a.click();document.body.removeChild(a); if(isBlob)setTimeout(()=>URL.revokeObjectURL(url),200); this._statusMsg(`PNG ${a.download?'downloaded':'opened in new tab'}: ${fn}`)};
+        if(this.canvas.toBlob){this.canvas.toBlob((blob)=>{if(!blob){trigger(this.canvas.toDataURL('image/png'),false);return}trigger(URL.createObjectURL(blob),true)},'image/png')}
+        else{trigger(this.canvas.toDataURL('image/png'),false)}
+      }catch(err){console.error('PNG download failed:',err); this._statusMsg('PNG download failed — check console for details.')}
+    }
+
+    _updateButtonsEnabled(){this.viewPortalBtn.disabled=this.levels<1; this.pauseEmergentBtn.disabled=!this.emergentActive; const step=this.emergentActive&&this.emergentPaused; this.stepBackBtn.disabled=!step; this.stepForwardBtn.disabled=!step}
+    _emergentStep(dir){if(!(this.emergentActive&&this.emergentPaused)){this._statusMsg("Step: pause Emergent first."); return} this.emergentAngle+=dir*(Math.PI/180); this._render()}
+
+    _syncSpeedField(){
+      if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
+    }
+    _applySpeedFromInput(){
+      if (!this.speedInput) return;
+      const v = parseFloat(this.speedInput.value);
+      if (!isFinite(v)) { this._syncSpeedField(); return; }
+      this.rotationSpeed = clamp(v, 0.001, 10);
+      this._syncSpeedField();
+      this._updateStatus();
+    }
+
+    _warnIfHeavy(){
+      if(this._popupShown||this.levels<2) return true;
+      let triCount=this.sides; for(let i=2;i<=this.levels;i++) triCount+=Math.pow(this.sides,i);
+      const est=triCount*0.000033; if(est>3){this._popupShown=true; return window.confirm(`This configuration will generate ~${triCount} triangles and may take ~${est.toFixed(2)}s.\nContinue?`)} return true;
+    }
+
+    _updatePlot(recompute=false){
+      const estimated=this._estimateTriangles(this.sides,this.levels), wantDefer=estimated>this.deferThreshold&&(this._isPortalZoomed()||this.levels>=5);
+      if(!wantDefer && !this._warnIfHeavy()) return;
+      if(recompute) this.gen.computeLevels(wantDefer?{deferAtLevel:this.levels}:undefined);
+
+      const K=totalReplications(this.sides,this.levels), a=clamp(this.alpha,0,1), cumulative=1-Math.pow(1-a,Math.min(K,5000));
+      this.overlayAlpha.textContent=cumulative.toFixed(3);
+      if(cumulative>=0.9999){ if(!this.edgesOnly){this.edgesOnly=true; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true; this._applyBg()} this.toggleEdgesBtn.disabled=true } else { this.toggleEdgesBtn.disabled=false }
+
+      if(!wantDefer) this._zoomToDesignExtent();
+      this._updateHeaderLabels(); this._updateStatus(); this._render();
+    }
+
+    _worldToScreen([x,y]){const sx=x*(200*this.scale)+this.tx, sy=-y*(200*this.scale)+this.ty; return[sx,sy]}
+    _drawTriangle(tri,fill,stroke,lw){const ctx=this.ctx,p0=this._worldToScreen(tri[0]),p1=this._worldToScreen(tri[1]),p2=this._worldToScreen(tri[2]); ctx.beginPath(); ctx.moveTo(p0[0],p0[1]); ctx.lineTo(p1[0],p1[1]); ctx.lineTo(p2[0],p2[1]); ctx.closePath(); if(fill){ctx.fillStyle=fill;ctx.fill()} if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.stroke()}}
+    _paletteByLevel(L,seedCount,a0){const R=(L===0)?1:this.sides, colors=buildHsvPalette(R), out=[], a=a0*Math.pow(.82,Math.max(0,L-1)); for(let r=0;r<R;r++){const [rr,gg,bb]=colors[r]; for(let k=0;k<seedCount;k++) out.push(rgbaStr(rr,gg,bb,a))} return out}
+    _paletteDistinct(seedCount,L,a0,R){const base=buildHsvPalette(seedCount), a=a0*Math.pow(.82,Math.max(0,L-1)), seed=base.map(([r,g,b,_])=>rgbaStr(r,g,b,a)), out=[]; for(let s=0;s<R;s++) out.push(...seed); return out}
+    _currentColorArray(allTris){const L=Math.max(0,this.levels|0), seed=this.gen.activeSeedTris(), seedCount=seed.length, R=(L===0)?1:this.sides, T=seedCount*R; if(this.edgesOnly||T===0) return new Array(allTris.length).fill(null); const a=this.alpha; if(this.colorMode==='by_level'){const arr=this._paletteByLevel(L,seedCount,a); return allTris.map((_,i)=>arr[i%arr.length])} else {const arr=this._paletteDistinct(seedCount,L,a,R); return allTris.map((_,i)=>arr[i%arr.length])}}
+    _lineWidthPx(){return Math.max(.5,2/(this.levels+1))}
+
+    _drawFrame(dtSec){
+      const ctx=this.ctx,w=this.canvas.clientWidth,h=this.canvas.clientHeight; ctx.fillStyle=this.whiteBg?'#fff':'#000'; ctx.fillRect(0,0,w,h);
+      const L=Math.max(0,this.levels|0);
+      if(this.emergentActive){
+        if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
+        const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
+        const rotated=new Array(seed.length);
+        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,this.emergentAngle),rotatePointAround(tri[1],c,this.emergentAngle),rotatePointAround(tri[2],c,this.emergentAngle)]}
+        let allTris;
+        if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
+        const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+        return;
+      } else if(this.rotationActive){
+        if(this.gen.level_tris[L]===null){ this.globalAngle+=this.rotationSpeed*(Math.PI/180); const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length) this._drawDeferred(seed,pivot,this.globalAngle); return }
+        this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+        const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,this.globalAngle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+        return;
+      } else {
+        const base=this.gen.activeTriangles();
+        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); return}
+        const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length) this._drawDeferred(seed,pivot); return;
+      }
+    }
+
+    _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
+    _zoomToDesignExtent(){const tris=this.gen.activeTriangles(), ext=this._trianglesExtent(tris); if(!ext){this._centerCanvas();return} const [xmin,xmax,ymin,ymax]=ext, mx=(xmax-xmin)*.10, my=(ymax-ymin)*.10; this._zoomToRect([xmin-mx,ymin-my,xmax+mx,ymax+mx])}
+    _centerCanvas(){this.scale=1; this.tx=this.canvas.clientWidth/2; this.ty=this.canvas.clientHeight/2}
+    _zoomToRect([xmin,ymin,xmax,ymax]){const wpx=this.canvas.clientWidth,hpx=this.canvas.clientHeight, ww=(xmax-xmin), wh=(ymax-ymin); if(!(ww>0&&wh>0))return; const sx=(wpx*.85)/(ww*200), sy=(hpx*.85)/(wh*200); this.scale=Math.min(sx,sy); const cx=(xmin+xmax)/2, cy=(ymin+ymax)/2, sp=this._worldToScreen([cx,cy]); this.tx+=(wpx/2-sp[0]); this.ty+=(hpx/2-sp[1])}
+
+    _updateHeaderLabels(){
+      const n=this.sides, L=this.levels, levelCode=`O${n}CC`;
+      this.codeLabel.textContent = (L>1)?`${levelCode}xx${L}`:levelCode;
+      const Ltris=this.gen.activeTriangles(), statsTris=(Ltris&&Ltris.length)?Ltris:(this.gen.activeSeedTris()||[]);
+      const {nodes,edges}=this._computeGraphStats(statsTris); this.graphStats.textContent=`nodes: ${nodes} | adj: ${edges}`;
+    }
+    _computeGraphStats(tris){
+      if(!tris||!tris.length) return {nodes:0,edges:0};
+      const key=(p)=>`${p[0].toFixed(6)},${p[1].toFixed(6)}`, nodeId=new Map(); let nextId=0; const edgeSet=new Set();
+      for(const t of tris){const ids=t.map(pt=>{const k=key(pt); if(!nodeId.has(k)) nodeId.set(k,nextId++); return nodeId.get(k)}); const add=(a,b)=>{const[i,j]=a<b?[a,b]:[b,a]; edgeSet.add(`${i}-${j}`)}; add(ids[0],ids[1]); add(ids[1],ids[2]); add(ids[2],ids[0])}
+      return {nodes:nodeId.size, edges:edgeSet.size};
+    }
+    _statusMsg(msg){this.statusEl.textContent=msg}
+    _updateStatus(){const fpsStr=(this.rotationActive||this.emergentActive)?` | ${this.fps.toFixed(0)} FPS`:''; this._statusMsg(`Sides: ${this.sides} | Levels: ${this.levels} | Alpha: ${this.alpha.toFixed(3)} | Rotation Speed: ${this.rotationSpeed.toFixed(3)}${fpsStr}`)}
+    _loop(){requestAnimationFrame((t)=>this._loop(t)); const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs); this._lastFrameTs=now; const dtSec=dt/1000; if(this.rotationActive||this.emergentActive){this._drawFrame(dtSec); this.fps=1000/dt; this._updateStatus()} else if(!this._drawnOnce){this._drawFrame(0); this._drawnOnce=true}}
+  }
+
+  new App();
+})();
+</script>
+</body>
+</html>
