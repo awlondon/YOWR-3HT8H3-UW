@@ -265,6 +265,7 @@
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.entityFocusActive=false;
+      this.primaryView="omega-level";
       // Live spectrogram (during Emergent)
       this.liveSpecEnabled=false;
       this.liveSpecEntityK=this.entityIndex ?? 0;
@@ -858,6 +859,9 @@
       const ctx=this.ctx;
       const rows=spec.length;
       const cols=Math.floor(bins/2);
+      const intensityScale=this.emergentActive
+        ? (0.9+0.1*Math.sin(this.emergentAngle*0.6))
+        : 1;
 
       const w=cols*cellSize;
       const h=rows*cellSize;
@@ -875,7 +879,7 @@
         if(!row) continue;
 
         for(let x=1;x<cols;x++){
-          const v=row[x];
+          const v=row[x]*intensityScale;
           if(v<=0) continue;
 
           const intensity=Math.min(255,Math.floor(v*255));
@@ -904,11 +908,52 @@
         }
       }
 
+      const resolvedBin=clamp(Math.round(this.cubeSliceBin),1,cols-1);
+      const highlightX=x0+resolvedBin*cellSize;
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.globalAlpha=0.35;
+      ctx.beginPath();
+      ctx.moveTo(highlightX,y0-6);
+      ctx.lineTo(highlightX,y0+h+6);
+      ctx.stroke();
+
+      if(this._specReplayActive&&this._specFrames.length){
+        const idx=Math.min(this._specReplayIndex,this._specFrames.length-1);
+        const duration=Math.max(1,this._specFrames[this._specFrames.length-1]?.t ?? this._specFrames.length-1);
+        const t=Math.max(0,this._specFrames[idx]?.t ?? 0);
+        const cursorCol=Math.round((t/duration)*(cols-1));
+        const cursorX=x0+cursorCol*cellSize;
+        ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+        ctx.globalAlpha=0.75;
+        ctx.beginPath();
+        ctx.moveTo(cursorX,y0-6);
+        ctx.lineTo(cursorX,y0+h+6);
+        ctx.stroke();
+      }
+
       ctx.globalAlpha=1;
       ctx.fillStyle=this.whiteBg?'#000':'#fff';
       ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillText(`Stack FFT | k=${k} | L=${Lmin}-${resolvedLmax}`,x0,y0-10);
+      const emergence=this._detectEmergenceLevel(spec);
+      const stability=this._computeStabilityScore(spec);
+      const stabilityLabel=Number.isFinite(stability)?` | stability=${stability.toFixed(2)}`:'';
+      const emergenceLabel=(emergence!==null)?` | emergence=L${emergence}`:'';
+      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
       ctx.restore();
+    }
+    _computeStabilityScore(spec){
+      if(!spec||!spec.length) return null;
+      let sum=0;
+      let count=0;
+      for(const row of spec){
+        if(!row) continue;
+        let max=0;
+        for(let i=1;i<row.length;i++) max=Math.max(max,row[i]);
+        sum+=max;
+        count+=1;
+      }
+      if(!count) return null;
+      return sum/count;
     }
     _drawLevelTimeSlice({bin=this.cubeSliceBin,cellSize=3,Lmin=1,Lmax=null}={}){
       if(!this.showCubeSlice) return;
@@ -1320,6 +1365,10 @@
       this.focusEntity(this.entityIndex);
     }
     _toggleEntityAuto(){
+      if(this.primaryView==="omega-level"){
+        this._statusMsg("Primary view locked to ω–L; auto-advance is disabled.");
+        return;
+      }
       this.entityAuto=!this.entityAuto;
       this.entityAutoBtn.setAttribute('aria-pressed',String(this.entityAuto));
       this.entityAutoBtn.textContent=this.entityAuto?"Auto-Advance: ON":"Auto-Advance";
@@ -1407,10 +1456,19 @@
           ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.entityIndex)
           : this.entityIndex;
         const Lmax=this._specMeta?.levelsMax??this.levels;
-        this._drawEntitySpectrogram(specEntity,{Lmax});
+        if(this.primaryView!=="omega-level"){
+          this._drawEntitySpectrogram(specEntity,{Lmax});
+        }
       }
-      if(drew&&this._specFrames.length&&this.showCubeSlice){
+      if(drew&&this._specFrames.length&&this.showCubeSlice&&this.primaryView!=="omega-level"){
         this._drawLevelTimeSlice();
+      }
+      if(drew&&this.primaryView==="omega-level"){
+        const specEntity=this._specReplayActive
+          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.entityIndex)
+          : this.entityIndex;
+        const Lmax=this._specMeta?.levelsMax??this.levels;
+        this._drawEntitySpectrogram(specEntity,{Lmax});
       }
     }
 
