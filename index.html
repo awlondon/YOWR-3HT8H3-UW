@@ -276,6 +276,8 @@
       this._specReplayActive=false;
       this._specReplayIndex=0;
       this._specReplayStart=0;
+      this._specReplayLevel=null;
+      this._specReplaySmooth=0.35;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -484,9 +486,10 @@
         createdAt:new Date().toISOString(),
         entityK:this.liveSpecEntityK,
         levels:this.levels,
+        levelsMax:this._specMeta?.levelsMax??this.levels,
         sides:this.sides,
         bins,
-        frames:this._specFrames.map(f=>({t:f.t,fft:Array.from(f.bins)}))
+        frames:this._specFrames.map(f=>({t:f.t,fft:Array.from(f.bins),level:f.level}))
       };
 
       const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
@@ -510,12 +513,14 @@
 
       this._specFrames=data.frames.map(f=>({
         t:f.t,
-        bins:Float32Array.from(f.fft)
+        bins:Float32Array.from(f.fft),
+        level:typeof f.level==="number"?f.level:undefined
       }));
 
       this._specMeta={
         entityK:typeof data.entityK==="number"?data.entityK:this.liveSpecEntityK,
         levels:typeof data.levels==="number"?data.levels:this.levels,
+        levelsMax:typeof data.levelsMax==="number"?data.levelsMax:(typeof data.levels==="number"?data.levels:this.levels),
         sides:typeof data.sides==="number"?data.sides:this.sides,
         bins:binsHalf>0?binsHalf:(this.liveSpecBins/2)
       };
@@ -536,6 +541,8 @@
       const binsHalf=this._specMeta?.bins||this._specFrames[0]?.bins?.length||this.liveSpecBins/2;
       this._resetLiveSpecBuffer(binsHalf);
       if(this._specMeta?.entityK!==undefined) this.liveSpecEntityK=this._specMeta.entityK;
+      const firstLevel=this._specFrames[0]?.level ?? this._specMeta?.levels ?? this.levels;
+      this._specReplayLevel=(typeof firstLevel==="number")?firstLevel:null;
       this.liveSpecEnabled=true;
       this._specReplayActive=true;
       this._specReplayIndex=0;
@@ -581,6 +588,7 @@
       this._specMeta={
         entityK:this.liveSpecEntityK,
         levels:this.levels,
+        levelsMax:this.levels,
         sides:this.sides,
         bins:this.liveSpecBins/2
       };
@@ -787,13 +795,14 @@
         return normalized;
       });
     }
-    _drawEntitySpectrogram(k,{bins=128,cellSize=3}={}){
+    _drawEntitySpectrogram(k,{bins=128,cellSize=3,Lmin=1,Lmax=null}={}){
+      const resolvedLmax=(Lmax??this._specMeta?.levelsMax??this.levels);
       if(!this._spectrogramCache) this._spectrogramCache={key:null,data:null};
-      const cacheKey=`${this.sides}:${this.levels}:${k}:${bins}`;
+      const cacheKey=`${this.sides}:${resolvedLmax}:${k}:${bins}:${Lmin}`;
       let spec=this._spectrogramCache.key===cacheKey?this._spectrogramCache.data:null;
 
       if(!spec){
-        const raw=this._computeEntitySpectrogram(k,{bins});
+        const raw=this._computeEntitySpectrogram(k,{bins,Lmin,Lmax:resolvedLmax});
         spec=this._normalizeSpectrogram(raw);
         this._spectrogramCache={key:cacheKey,data:spec};
       }
@@ -837,6 +846,22 @@
         }
       }
 
+      const cursorLevel=(typeof this._specReplayLevel==="number")?this._specReplayLevel:null;
+      if(cursorLevel!==null){
+        const cursorIndex=Math.round(cursorLevel)-Lmin;
+        if(cursorIndex>=0&&cursorIndex<rows){
+          const cursorY=y0+cursorIndex*cellSize;
+          ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+          ctx.lineWidth=1;
+          ctx.globalAlpha=0.85;
+          ctx.strokeRect(x0-6,cursorY-1,w+12,cellSize+2);
+        }
+      }
+
+      ctx.globalAlpha=1;
+      ctx.fillStyle=this.whiteBg?'#000':'#fff';
+      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(`Stack FFT | k=${k} | L=${Lmin}-${resolvedLmax}`,x0,y0-10);
       ctx.restore();
     }
     _trackLivePeaks(mag){
@@ -871,10 +896,18 @@
           this._liveSpecBuf[this._liveSpecHead].set(frame.bins);
           this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
           this._trackLivePeaks(frame.bins);
+          if(typeof frame.level==="number"){
+            if(this._specReplayLevel===null){
+              this._specReplayLevel=frame.level;
+            } else {
+              this._specReplayLevel+= (frame.level-this._specReplayLevel)*this._specReplaySmooth;
+            }
+          }
           this._specReplayIndex+=1;
         }
         if(this._specReplayIndex>=this._specFrames.length){
           this._specReplayActive=false;
+          this._specReplayLevel=null;
           this._statusMsg("Spectrogram replay complete.");
         }
         return;
@@ -908,8 +941,12 @@
       if(this._specRecording){
         this._specFrames.push({
           t:Math.round(now-this._specRecordStart),
-          bins:Float32Array.from(mag)
+          bins:Float32Array.from(mag),
+          level:this.levels
         });
+        if(this._specMeta){
+          this._specMeta.levelsMax=Math.max(this._specMeta.levelsMax??this.levels,this.levels);
+        }
         this._updateSpecInfo();
       }
     }
@@ -1222,7 +1259,13 @@
         if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
         else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
-      if(drew&&(this.entityFocusActive||this.entityAuto)) this._drawEntitySpectrogram(this.entityIndex);
+      if(drew&&(this.entityFocusActive||this.entityAuto||this._specReplayActive)){
+        const specEntity=this._specReplayActive
+          ? (this._specMeta?.entityK ?? this.liveSpecEntityK ?? this.entityIndex)
+          : this.entityIndex;
+        const Lmax=this._specMeta?.levelsMax??this.levels;
+        this._drawEntitySpectrogram(specEntity,{Lmax});
+      }
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
