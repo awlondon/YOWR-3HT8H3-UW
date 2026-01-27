@@ -514,6 +514,111 @@
 
       return signal;
     }
+    _computeEntitySpectrogram(k,{Lmin=1,Lmax=this.levels,bins=128}={}){
+      const originalLevels=this.levels;
+      const spectra=[];
+
+      for(let L=Lmin;L<=Lmax;L++){
+        this.levels=L;
+        this.gen.setLevels(L);
+        this.gen.computeLevels();
+
+        const signal=this._computeEntitySignal(k,bins);
+        if(!signal){
+          spectra.push(null);
+          continue;
+        }
+
+        const mag=this._fftMagnitude(signal);
+        spectra.push(mag);
+      }
+
+      this.levels=originalLevels;
+      this.gen.setLevels(originalLevels);
+      this.gen.computeLevels();
+
+      return spectra;
+    }
+    _normalizeSpectrogram(spectra){
+      return spectra.map((row)=>{
+        if(!row) return null;
+        let max=0;
+        for(let i=0;i<row.length;i++) max=Math.max(max,row[i]);
+        if(max<=1e-9) return row;
+        const normalized=new Float32Array(row.length);
+        for(let i=0;i<row.length;i++) normalized[i]=row[i]/max;
+        return normalized;
+      });
+    }
+    _drawEntitySpectrogram(k,{bins=128,cellSize=3}={}){
+      if(!this._spectrogramCache) this._spectrogramCache={key:null,data:null};
+      const cacheKey=`${this.sides}:${this.levels}:${k}:${bins}`;
+      let spec=this._spectrogramCache.key===cacheKey?this._spectrogramCache.data:null;
+
+      if(!spec){
+        const raw=this._computeEntitySpectrogram(k,{bins});
+        spec=this._normalizeSpectrogram(raw);
+        this._spectrogramCache={key:cacheKey,data:spec};
+      }
+
+      if(!spec||!spec.length) return;
+
+      const ctx=this.ctx;
+      const rows=spec.length;
+      const cols=Math.floor(bins/2);
+
+      const w=cols*cellSize;
+      const h=rows*cellSize;
+
+      const x0=16;
+      const y0=this.canvas.clientHeight-h-16;
+
+      ctx.save();
+      ctx.globalAlpha=0.95;
+      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillRect(x0-6,y0-6,w+12,h+12);
+
+      for(let y=0;y<rows;y++){
+        const row=spec[y];
+        if(!row) continue;
+
+        for(let x=1;x<cols;x++){
+          const v=row[x];
+          if(v<=0) continue;
+
+          const intensity=Math.min(255,Math.floor(v*255));
+          ctx.fillStyle=this.whiteBg
+            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
+            : `rgb(${intensity},${intensity},${intensity})`;
+
+          ctx.fillRect(
+            x0+x*cellSize,
+            y0+y*cellSize,
+            cellSize,
+            cellSize
+          );
+        }
+      }
+
+      ctx.restore();
+    }
+    _detectEmergenceLevel(spec){
+      for(let i=0;i<spec.length;i++){
+        const row=spec[i];
+        if(!row) continue;
+
+        let energy=0;
+        let peak=0;
+        for(let j=0;j<row.length;j++){
+          const v=row[j];
+          energy+=v;
+          if(v>peak) peak=v;
+        }
+
+        if(energy>0&&peak/energy>0.18) return i+1;
+      }
+      return null;
+    }
     _fftMagnitude(signal){
       const N=signal.length;
       const re=new Float32Array(signal);
@@ -739,7 +844,7 @@
         if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
         else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
-      if(drew&&(this.entityFocusActive||this.entityAuto)) this._drawEntityFFTOverlay(this.entityIndex);
+      if(drew&&(this.entityFocusActive||this.entityAuto)) this._drawEntitySpectrogram(this.entityIndex);
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
