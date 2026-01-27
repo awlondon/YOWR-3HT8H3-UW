@@ -293,12 +293,16 @@
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
+      this._spectrogramCache={key:null,data:null};
+      this._spectrogramCacheMap=new Map();
+      this._fingerprintCache=new Map();
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
       if (this.sliceBinInput) this.sliceBinInput.value = String(this.cubeSliceBin);
 
       this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
+      this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._updatePlot(true);
       this._loop();
@@ -715,6 +719,11 @@
       const estimated=this._estimateTriangles(this.sides,this.levels), wantDefer=estimated>this.deferThreshold&&(this._isPortalZoomed()||this.levels>=5);
       if(!wantDefer && !this._warnIfHeavy()) return;
       if(recompute) this.gen.computeLevels(wantDefer?{deferAtLevel:this.levels}:undefined);
+      if(recompute){
+        this._spectrogramCache={key:null,data:null};
+        if(this._spectrogramCacheMap) this._spectrogramCacheMap.clear();
+        if(this._fingerprintCache) this._fingerprintCache.clear();
+      }
 
       const K=totalReplications(this.sides,this.levels), a=clamp(this.alpha,0,1), cumulative=1-Math.pow(1-a,Math.min(K,5000));
       this.overlayAlpha.textContent=cumulative.toFixed(3);
@@ -871,15 +880,170 @@
         return normalized;
       });
     }
-    _drawEntitySpectrogram(k,{bins=128,cellSize=3,Lmin=1,Lmax=null}={}){
+    _spectrogramKey(k,{bins,Lmin,Lmax}){
+      return `${this.sides}:${Lmax}:${k}:${bins}:${Lmin}`;
+    }
+    _getNormalizedSpectrogram(k,{bins=128,Lmin=1,Lmax=null,allowCompute=false}={}){
       const resolvedLmax=(Lmax??this._specMeta?.levelsMax??this.levels);
-      if(!this._spectrogramCache) this._spectrogramCache={key:null,data:null};
-      const cacheKey=`${this.sides}:${resolvedLmax}:${k}:${bins}:${Lmin}`;
-      let spec=this._spectrogramCache.key===cacheKey?this._spectrogramCache.data:null;
+      const cacheKey=this._spectrogramKey(k,{bins,Lmin,Lmax:resolvedLmax});
+      const cached=this._spectrogramCacheMap?.get(cacheKey);
+      if(cached) return {spec:cached, resolvedLmax, cacheKey};
+      if(!allowCompute) return {spec:null, resolvedLmax, cacheKey};
+      const raw=this._computeEntitySpectrogram(k,{bins,Lmin,Lmax:resolvedLmax});
+      const spec=this._normalizeSpectrogram(raw);
+      this._spectrogramCache={key:cacheKey,data:spec};
+      this._spectrogramCacheMap?.set(cacheKey,spec);
+      return {spec, resolvedLmax, cacheKey};
+    }
+    _computeFingerprintFromSpectrogram(spec,{epsilon=0.15,topN=5,Lmin=1}={}){
+      const rows=spec?.length??0;
+      if(rows===0) return null;
+      const firstRow=spec.find(row=>row);
+      if(!firstRow) return null;
+      const cols=firstRow.length;
+      const bins=Math.max(1,cols-1);
+      const persistence=new Float32Array(bins);
+      let validRows=0;
 
+      for(let y=0;y<rows;y++){
+        const row=spec[y];
+        if(!row) continue;
+        validRows+=1;
+        for(let x=1;x<cols;x++){
+          if(row[x]>epsilon) persistence[x-1]+=1;
+        }
+      }
+
+      if(validRows>0){
+        for(let i=0;i<persistence.length;i++) persistence[i]/=validRows;
+      }
+
+      const persistenceList=Array.from(persistence,(v,i)=>({idx:i+1,val:v}));
+      persistenceList.sort((a,b)=>b.val-a.val||a.idx-b.idx);
+      const peakSpine=new Float32Array(topN);
+      for(let i=0;i<topN;i++){
+        const entry=persistenceList[i];
+        peakSpine[i]=entry ? (entry.idx/(cols-1)) : 0;
+      }
+
+      const centroids=[];
+      for(let y=0;y<rows;y++){
+        const row=spec[y];
+        if(!row) continue;
+        let sum=0;
+        let weighted=0;
+        for(let x=1;x<cols;x++){
+          const v=row[x];
+          sum+=v;
+          weighted+=v*x;
+        }
+        if(sum>0){
+          centroids.push((weighted/sum)/(cols-1));
+        }
+      }
+
+      let centroidSlope=0;
+      let centroidVar=0;
+      if(centroids.length>=2){
+        const n=centroids.length;
+        const meanX=(n-1)/2;
+        let meanY=0;
+        for(const v of centroids) meanY+=v;
+        meanY/=n;
+        let cov=0;
+        let varX=0;
+        let varY=0;
+        for(let i=0;i<n;i++){
+          const dx=i-meanX;
+          const dy=centroids[i]-meanY;
+          cov+=dx*dy;
+          varX+=dx*dx;
+          varY+=dy*dy;
+        }
+        centroidSlope=varX>0?cov/varX:0;
+        centroidVar=varY/n;
+      } else if(centroids.length===1){
+        centroidVar=0;
+      }
+
+      let evenEnergy=0;
+      let oddEnergy=0;
+      for(let y=0;y<rows;y++){
+        const row=spec[y];
+        if(!row) continue;
+        let rowEnergy=0;
+        for(let x=1;x<cols;x++) rowEnergy+=row[x];
+        const level=Lmin+y;
+        if(level%2===0) evenEnergy+=rowEnergy;
+        else oddEnergy+=rowEnergy;
+      }
+      const parity=(evenEnergy+oddEnergy)>0?(evenEnergy-oddEnergy)/(evenEnergy+oddEnergy):0;
+
+      const omegaEnergy=new Float32Array(bins);
+      let totalEnergy=0;
+      for(let y=0;y<rows;y++){
+        const row=spec[y];
+        if(!row) continue;
+        for(let x=1;x<cols;x++){
+          omegaEnergy[x-1]+=row[x];
+        }
+      }
+      for(let i=0;i<omegaEnergy.length;i++) totalEnergy+=omegaEnergy[i];
+      let entropy=0;
+      if(totalEnergy>0){
+        const logBase=Math.log2(bins);
+        for(let i=0;i<omegaEnergy.length;i++){
+          const p=omegaEnergy[i]/totalEnergy;
+          if(p>0) entropy-=p*Math.log2(p);
+        }
+        if(logBase>0) entropy/=logBase;
+      }
+
+      const fingerprint=new Float32Array(
+        persistence.length + peakSpine.length + 4
+      );
+      let offset=0;
+      fingerprint.set(persistence,offset); offset+=persistence.length;
+      fingerprint.set(peakSpine,offset); offset+=peakSpine.length;
+      fingerprint[offset++]=centroidSlope;
+      fingerprint[offset++]=centroidVar;
+      fingerprint[offset++]=parity;
+      fingerprint[offset++]=entropy;
+      return fingerprint;
+    }
+    computeEntityFingerprint(k,{bins=128,Lmin=1,Lmax=null,epsilon=0.15,topN=5}={}){
+      const {spec,resolvedLmax,cacheKey}=this._getNormalizedSpectrogram(k,{bins,Lmin,Lmax,allowCompute:false});
       if(!spec){
-        const raw=this._computeEntitySpectrogram(k,{bins,Lmin,Lmax:resolvedLmax});
-        spec=this._normalizeSpectrogram(raw);
+        this._statusMsg("Fingerprint requires cached ω–L data. Render the ω–L view first.");
+        return null;
+      }
+      const fpKey=`${cacheKey}:${epsilon}:${topN}`;
+      const cached=this._fingerprintCache?.get(fpKey);
+      if(cached) return cached;
+      const fingerprint=this._computeFingerprintFromSpectrogram(spec,{epsilon,topN,Lmin});
+      if(fingerprint) this._fingerprintCache?.set(fpKey,fingerprint);
+      return fingerprint;
+    }
+    compareFingerprints(f1,f2){
+      if(!f1||!f2) return 0;
+      const n=Math.min(f1.length,f2.length);
+      if(n===0) return 0;
+      let dot=0;
+      let a=0;
+      let b=0;
+      for(let i=0;i<n;i++){
+        const x=f1[i];
+        const y=f2[i];
+        dot+=x*y;
+        a+=x*x;
+        b+=y*y;
+      }
+      if(a<=0||b<=0) return 0;
+      return dot/Math.sqrt(a*b);
+    }
+    _drawEntitySpectrogram(k,{bins=128,cellSize=3,Lmin=1,Lmax=null}={}){
+      const {spec,resolvedLmax,cacheKey}=this._getNormalizedSpectrogram(k,{bins,Lmin,Lmax,allowCompute:true});
+      if(spec&&this._spectrogramCache?.key!==cacheKey){
         this._spectrogramCache={key:cacheKey,data:spec};
       }
 
@@ -1602,6 +1766,10 @@
     _statusMsg(msg){this.statusEl.textContent=msg}
     _updateStatus(){const fpsStr=(this.rotationActive||this.emergentActive)?` | ${this.fps.toFixed(0)} FPS`:''; this._statusMsg(`Sides: ${this.sides} | Levels: ${this.levels} | Alpha: ${this.alpha.toFixed(3)} | Rotation Speed: ${this.rotationSpeed.toFixed(3)}${fpsStr}`)}
     _loop(){requestAnimationFrame((t)=>this._loop(t)); const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs); this._lastFrameTs=now; const dtSec=dt/1000; if(this.rotationActive||this.emergentActive){this._drawFrame(dtSec); this.fps=1000/dt; this._updateStatus()} else if(!this._drawnOnce){this._drawFrame(0); this._drawnOnce=true}}
+    _exposeFingerprintApi(){
+      window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
+      window.compareFingerprints=(f1,f2)=>this.compareFingerprints(f1,f2);
+    }
   }
 
   new App();
