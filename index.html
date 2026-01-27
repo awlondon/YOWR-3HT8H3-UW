@@ -326,8 +326,12 @@
       window.addEventListener('mouseup',()=>{this.dragging=false});
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
       window.addEventListener('keydown',e=>{
-        if(e.key==='ArrowLeft')this.tx-=50; else if(e.key==='ArrowRight')this.tx+=50; else if(e.key==='ArrowUp')this.ty-=50; else if(e.key==='ArrowDown')this.ty+=50; else if(e.key.toLowerCase()==='r')this._resetView();
         const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
+        if(!typing){
+          if(e.key==='['){this.focusEntity(--this.entityIndex); e.preventDefault(); return;}
+          if(e.key===']'){this.focusEntity(++this.entityIndex); e.preventDefault(); return;}
+        }
+        if(e.key==='ArrowLeft')this.tx-=50; else if(e.key==='ArrowRight')this.tx+=50; else if(e.key==='ArrowUp')this.ty-=50; else if(e.key==='ArrowDown')this.ty+=50; else if(e.key.toLowerCase()==='r')this._resetView();
         if(!typing&&this.emergentActive&&this.emergentPaused){ if(e.key===','){this._emergentStep(-1);e.preventDefault();return} if(e.key==='.') {this._emergentStep(+1);e.preventDefault();return}}
         this._render();
       });
@@ -461,32 +465,69 @@
         this._updateButtonsEnabled();
       }
     }
-    _focusEntity(index){
-      const n=this.sides, span=TAU/n, theta0=canonicalStartAngle(n);
-      this.entityIndex=((index%n)+n)%n;
-      const {rMin,rMax}=this._entityRadiusBounds();
+    focusEntity(k,{animate=true}={}){
+      const n=this.sides;
+      if(n<3) return;
+
+      const L=this.levels;
       const pivot=this.gen.activePivot();
-      const thetaK=theta0+this.entityIndex*span, thetaC=thetaK+span/2;
-      const rFocus=(rMax>0)?(rMin>0?Math.sqrt(rMin*rMax):(rMax*0.5)):this.radius*0.5;
-      const focus=[pivot[0]+rFocus*Math.cos(thetaC), pivot[1]+rFocus*Math.sin(thetaC)];
-      const w=2*rFocus*Math.sin(span/2), h=(rMax-rMin);
-      const extent=Math.max(w,h,this.radius*0.2)*1.2;
-      this._zoomToRect([focus[0]-extent, focus[1]-extent, focus[0]+extent, focus[1]+extent]);
+
+      const theta0=canonicalStartAngle(n);
+      const dTheta=TAU/n;
+
+      const kk=((k%n)+n)%n;
+      const thetaA=theta0+kk*dTheta;
+      const thetaC=thetaA+dTheta/2;
+
+      let rMin=this.radius;
+      if(L>=2){
+        rMin=this.radius*multiplier(L,n);
+      }
+
+      let rMax=rMin;
+      if(L>=2){
+        let acc=0;
+        for(let cur=2;cur<=L;cur++){
+          const rf=(n%2===1)?Math.cos(Math.PI/n):1;
+          acc+=this.radius*multiplier(cur,n)*rf;
+        }
+        rMax=acc;
+      }
+
+      const rFocus=Math.sqrt(Math.max(1e-6,rMin*rMax));
+
+      const fx=pivot[0]+Math.cos(thetaC)*rFocus;
+      const fy=pivot[1]+Math.sin(thetaC)*rFocus;
+
+      const chordW=2*rFocus*Math.sin(dTheta/2);
+      const radialH=Math.max(1e-6,rMax-rMin);
+      const extent=Math.max(chordW,radialH)*1.25;
+
+      const targetRect=[fx-extent,fy-extent,fx+extent,fy+extent];
+
+      this.entityIndex=kk;
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
-      this._render();
+
+      if(!animate){
+        this._zoomToRect(targetRect);
+        this._render();
+        return;
+      }
+
+      this._animateZoomToRect(targetRect,420);
     }
     _advanceEntity(dir){
       const n=this.sides;
       this.entityIndex=((this.entityIndex+dir)%n+n)%n;
-      this._focusEntity(this.entityIndex);
+      this.focusEntity(this.entityIndex);
     }
     _toggleEntityAuto(){
       this.entityAuto=!this.entityAuto;
       this.entityAutoBtn.setAttribute('aria-pressed',String(this.entityAuto));
       this.entityAutoBtn.textContent=this.entityAuto?"Auto-Advance: ON":"Auto-Advance";
       if(this.entityAuto){
-        this._focusEntity(this.entityIndex);
+        this.focusEntity(this.entityIndex);
         this.entityAutoTimer=window.setInterval(()=>this._advanceEntity(1),this.entityAutoMs);
       } else if(this.entityAutoTimer){
         window.clearInterval(this.entityAutoTimer);
@@ -567,6 +608,37 @@
     _zoomToDesignExtent(){const tris=this.gen.activeTriangles(), ext=this._trianglesExtent(tris); if(!ext){this._centerCanvas();return} const [xmin,xmax,ymin,ymax]=ext, mx=(xmax-xmin)*.10, my=(ymax-ymin)*.10; this._zoomToRect([xmin-mx,ymin-my,xmax+mx,ymax+mx])}
     _centerCanvas(){this.scale=1; this.tx=this.canvas.clientWidth/2; this.ty=this.canvas.clientHeight/2}
     _zoomToRect([xmin,ymin,xmax,ymax]){const wpx=this.canvas.clientWidth,hpx=this.canvas.clientHeight, ww=(xmax-xmin), wh=(ymax-ymin); if(!(ww>0&&wh>0))return; const sx=(wpx*.85)/(ww*200), sy=(hpx*.85)/(wh*200); this.scale=Math.min(sx,sy); const cx=(xmin+xmax)/2, cy=(ymin+ymax)/2, sp=this._worldToScreen([cx,cy]); this.tx+=(wpx/2-sp[0]); this.ty+=(hpx/2-sp[1])}
+    _animateZoomToRect(rect,durationMs=400){
+      const startScale=this.scale;
+      const startTx=this.tx;
+      const startTy=this.ty;
+
+      this._zoomToRect(rect);
+      const targetScale=this.scale;
+      const targetTx=this.tx;
+      const targetTy=this.ty;
+
+      this.scale=startScale;
+      this.tx=startTx;
+      this.ty=startTy;
+
+      const t0=performance.now();
+      const ease=(t)=>t*t*(3-2*t);
+
+      const step=(now)=>{
+        const u=clamp((now-t0)/durationMs,0,1);
+        const e=ease(u);
+
+        this.scale=startScale+(targetScale-startScale)*e;
+        this.tx=startTx+(targetTx-startTx)*e;
+        this.ty=startTy+(targetTy-startTy)*e;
+
+        this._render();
+        if(u<1) requestAnimationFrame(step);
+      };
+
+      requestAnimationFrame(step);
+    }
 
     _updateHeaderLabels(){
       const n=this.sides, L=this.levels, levelCode=`O${n}CC`;
