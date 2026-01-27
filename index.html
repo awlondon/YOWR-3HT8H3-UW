@@ -244,6 +244,15 @@
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.entityFocusActive=false;
+      // Live spectrogram (during Emergent)
+      this.liveSpecEnabled=false;
+      this.liveSpecEntityK=this.entityIndex ?? 0;
+      this.liveSpecBins=128;
+      this.liveSpecRows=80;
+      this.liveSpecEveryMs=100;
+      this._liveSpecLastTs=0;
+      this._liveSpecHead=0;
+      this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(this.liveSpecBins/2));
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -331,6 +340,18 @@
         if(!typing){
           if(e.key==='['){this.focusEntity(--this.entityIndex); e.preventDefault(); return;}
           if(e.key===']'){this.focusEntity(++this.entityIndex); e.preventDefault(); return;}
+          if(e.key.toLowerCase()==='f'){
+            this.liveSpecEnabled=!this.liveSpecEnabled;
+            this._statusMsg(this.liveSpecEnabled?"Live FFT: ON (Emergent)":"Live FFT: OFF");
+            this._render();
+            return;
+          }
+          if(e.key.toLowerCase()==='g'){
+            this.liveSpecEntityK=(this.liveSpecEntityK+1)%this.sides;
+            this._statusMsg(`Live FFT entity k = ${this.liveSpecEntityK}`);
+            this._render();
+            return;
+          }
         }
         if(e.key==='ArrowLeft')this.tx-=50; else if(e.key==='ArrowRight')this.tx+=50; else if(e.key==='ArrowUp')this.ty-=50; else if(e.key==='ArrowDown')this.ty+=50; else if(e.key.toLowerCase()==='r')this._resetView();
         if(!typing&&this.emergentActive&&this.emergentPaused){ if(e.key===','){this._emergentStep(-1);e.preventDefault();return} if(e.key==='.') {this._emergentStep(+1);e.preventDefault();return}}
@@ -514,6 +535,43 @@
 
       return signal;
     }
+    _computeEntitySignalFromTris(tris,k,bins=128){
+      if(!tris||!tris.length) return null;
+
+      const n=this.sides;
+      const L=this.levels;
+      const pivot=this.gen.activePivot();
+
+      let rMin=this.radius;
+      let rMax=rMin;
+
+      if(L>=2){
+        let acc=0;
+        for(let cur=2;cur<=L;cur++){
+          const rf=(n%2===1)?Math.cos(Math.PI/n):1;
+          acc+=this.radius*multiplier(cur,n)*rf;
+        }
+        rMax=acc;
+      }
+
+      const dr=(rMax-rMin)/bins;
+      if(!(dr>0)) return null;
+
+      const signal=new Float32Array(bins);
+
+      for(const tri of tris){
+        if(!this._triangleInEntity(tri,k)) continue;
+
+        const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+        const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+
+        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+        const idx=Math.floor((r-rMin)/dr);
+        if(idx>=0&&idx<bins) signal[idx]+=1;
+      }
+
+      return signal;
+    }
     _computeEntitySpectrogram(k,{Lmin=1,Lmax=this.levels,bins=128}={}){
       const originalLevels=this.levels;
       const spectra=[];
@@ -599,6 +657,78 @@
           );
         }
       }
+
+      ctx.restore();
+    }
+    _updateLiveSpectrogram(tris){
+      if(!this.liveSpecEnabled) return;
+      if(!this.emergentActive) return;
+
+      const now=performance.now();
+      if(now-this._liveSpecLastTs<this.liveSpecEveryMs) return;
+      this._liveSpecLastTs=now;
+
+      const bins=this.liveSpecBins;
+      const k=((this.liveSpecEntityK%this.sides)+this.sides)%this.sides;
+
+      const sig=this._computeEntitySignalFromTris(tris,k,bins);
+      if(!sig) return;
+
+      const mag=this._fftMagnitude(sig);
+
+      let mx=0;
+      for(let i=1;i<mag.length;i++) if(mag[i]>mx) mx=mag[i];
+      if(mx>1e-9){
+        for(let i=1;i<mag.length;i++) mag[i]/=mx;
+      }
+
+      this._liveSpecBuf[this._liveSpecHead].set(mag);
+      this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
+    }
+    _drawLiveSpectrogramHUD(){
+      if(!this.liveSpecEnabled) return;
+      if(!this.emergentActive) return;
+
+      const ctx=this.ctx;
+      const rows=this.liveSpecRows;
+      const cols=this.liveSpecBins/2;
+      const cell=2;
+
+      const w=cols*cell;
+      const h=rows*cell;
+
+      const x0=16;
+      const y0=this.canvas.clientHeight-h-16;
+
+      ctx.save();
+      ctx.globalAlpha=0.95;
+
+      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillRect(x0-6,y0-6,w+12,h+12);
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.strokeRect(x0-6,y0-6,w+12,h+12);
+
+      for(let r=0;r<rows;r++){
+        const idx=(this._liveSpecHead+r)%rows;
+        const row=this._liveSpecBuf[idx];
+
+        for(let c=1;c<cols;c++){
+          const v=row[c];
+          if(v<=0) continue;
+
+          const intensity=Math.min(255,(v*255)|0);
+          ctx.fillStyle=this.whiteBg
+            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
+            : `rgb(${intensity},${intensity},${intensity})`;
+
+          ctx.fillRect(x0+c*cell,y0+r*cell,cell,cell);
+        }
+      }
+
+      ctx.globalAlpha=1;
+      ctx.fillStyle=this.whiteBg?'#000':'#fff';
+      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(`Live FFT (Emergent) | k=${this.liveSpecEntityK} | bins=${cols}`,x0,y0-10);
 
       ctx.restore();
     }
@@ -825,6 +955,8 @@
         if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+        this._updateLiveSpectrogram(allTris);
+        this._drawLiveSpectrogramHUD();
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
