@@ -243,6 +243,7 @@
       this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
+      this.entityFocusActive=false;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -378,7 +379,7 @@
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
     _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this._zoomToDesignExtent(); this._render()}
+    _resetView(){this.entityFocusActive=false; this._zoomToDesignExtent(); this._render()}
     _viewPortal(){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
       const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
@@ -447,6 +448,140 @@
       const rMin=this.radius*multiplier(L,n)*rf;
       return {rMin:Math.max(0,rMin), rMax:Math.max(rMin,rMax)};
     }
+    _triangleInEntity(tri,k){
+      const n=this.sides;
+      const pivot=this.gen.activePivot();
+      const theta0=canonicalStartAngle(n);
+      const dTheta=TAU/n;
+
+      const kk=((k%n)+n)%n;
+      const a0=theta0+kk*dTheta;
+      const a1=a0+dTheta;
+
+      const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+      const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+
+      let ang=Math.atan2(cy-pivot[1],cx-pivot[0]);
+      if(ang<0) ang+=TAU;
+
+      let aa0=a0%TAU;
+      let aa1=a1%TAU;
+
+      if(aa0<0) aa0+=TAU;
+      if(aa1<0) aa1+=TAU;
+
+      return aa0<aa1
+        ? (ang>=aa0&&ang<aa1)
+        : (ang>=aa0||ang<aa1);
+    }
+    _computeEntitySignal(k,bins=128){
+      const tris=this.gen.activeTriangles();
+      if(!tris||!tris.length) return null;
+
+      const n=this.sides;
+      const L=this.levels;
+
+      let rMin=this.radius;
+      let rMax=rMin;
+
+      if(L>=2){
+        let acc=0;
+        for(let cur=2;cur<=L;cur++){
+          const rf=(n%2===1)?Math.cos(Math.PI/n):1;
+          acc+=this.radius*multiplier(cur,n)*rf;
+        }
+        rMax=acc;
+      }
+
+      const dr=(rMax-rMin)/bins;
+      if(!(dr>0)) return null;
+      const signal=new Float32Array(bins);
+
+      const pivot=this.gen.activePivot();
+
+      for(const tri of tris){
+        if(!this._triangleInEntity(tri,k)) continue;
+
+        const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+        const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+
+        const idx=Math.floor((r-rMin)/dr);
+        if(idx>=0&&idx<bins){
+          signal[idx]+=1;
+        }
+      }
+
+      return signal;
+    }
+    _fftMagnitude(signal){
+      const N=signal.length;
+      const re=new Float32Array(signal);
+      const im=new Float32Array(N);
+
+      for(let len=2;len<=N;len<<=1){
+        const half=len>>1;
+        const step=TAU/len;
+
+        for(let i=0;i<N;i+=len){
+          for(let j=0;j<half;j++){
+            const k=i+j;
+            const l=k+half;
+
+            const ang=step*j;
+            const wr=Math.cos(ang);
+            const wi=-Math.sin(ang);
+
+            const tr=wr*re[l]-wi*im[l];
+            const ti=wr*im[l]+wi*re[l];
+
+            re[l]=re[k]-tr;
+            im[l]=im[k]-ti;
+            re[k]+=tr;
+            im[k]+=ti;
+          }
+        }
+      }
+
+      const mag=new Float32Array(N/2);
+      for(let i=1;i<mag.length;i++){
+        mag[i]=Math.hypot(re[i],im[i]);
+      }
+      return mag;
+    }
+    _drawEntityFFTOverlay(k){
+      const sig=this._computeEntitySignal(k,128);
+      if(!sig) return;
+
+      const mag=this._fftMagnitude(sig);
+      if(!mag||!mag.length) return;
+
+      const ctx=this.ctx;
+      const w=220,h=120;
+      const x=16,y=16;
+
+      ctx.save();
+      ctx.globalAlpha=0.9;
+      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillRect(x,y,w,h);
+
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.strokeRect(x,y,w,h);
+
+      let max=0;
+      for(let i=1;i<mag.length;i++) max=Math.max(max,mag[i]);
+      if(!(max>0)) max=1;
+
+      ctx.beginPath();
+      for(let i=1;i<mag.length;i++){
+        const px=x+(i/mag.length)*w;
+        const py=y+h-(mag[i]/max)*h;
+        if(i===1) ctx.moveTo(px,py);
+        else ctx.lineTo(px,py);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
     _updateEntityLabel(){
       const n=this.sides;
       if(this.entityIndex>=n) this.entityIndex%=n;
@@ -506,6 +641,7 @@
       const targetRect=[fx-extent,fy-extent,fx+extent,fy+extent];
 
       this.entityIndex=kk;
+      this.entityFocusActive=true;
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
 
@@ -572,6 +708,7 @@
     _drawFrame(dtSec){
       const ctx=this.ctx,w=this.canvas.clientWidth,h=this.canvas.clientHeight; ctx.fillStyle=this.whiteBg?'#fff':'#000'; ctx.fillRect(0,0,w,h);
       const L=Math.max(0,this.levels|0);
+      let drew=false;
       if(this.emergentActive){
         if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
         const angle=this._snapAngle(this.emergentAngle);
@@ -583,25 +720,26 @@
         if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-        return;
+        drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
           this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angle=this._snapAngle(this.globalAngle);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length) this._drawDeferred(seed,pivot,angle);
-          return;
+          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
+        } else {
+          this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          const angle=this._snapAngle(this.globalAngle);
+          const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          drew=true;
         }
-        this.globalAngle+=this.rotationSpeed*(Math.PI/180);
-        const angle=this._snapAngle(this.globalAngle);
-        const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
-        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-        return;
       } else {
         const base=this.gen.activeTriangles();
-        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); return}
-        const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length) this._drawDeferred(seed,pivot); return;
+        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
+        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
+      if(drew&&(this.entityFocusActive||this.entityAuto)) this._drawEntityFFTOverlay(this.entityIndex);
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
