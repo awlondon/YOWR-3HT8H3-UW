@@ -266,6 +266,7 @@
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.entityFocusActive=false;
       this.primaryView="omega-level";
+      this.cubeSliceBin=6;
       this.selectedOmega=this.cubeSliceBin;
       this.selectedLevel=this.levels;
       this._omegaLevelPanel=null;
@@ -288,7 +289,6 @@
       this._specReplayStart=0;
       this._specReplayLevel=null;
       this._specReplaySmooth=0.35;
-      this.cubeSliceBin=6;
       this.showCubeSlice=true;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
@@ -1134,12 +1134,16 @@
       const stability=this._computeStabilityScore(spec);
       const stabilityLabel=Number.isFinite(stability)?` | stability=${stability.toFixed(2)}`:'';
       const emergenceLabel=(emergence!==null)?` | emergence=L${emergence}`:'';
-      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax} | sel ω${this.selectedOmega} L${this.selectedLevel}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
+      const omegaLabel=Number.isFinite(this.selectedOmega)?this.selectedOmega:this.cubeSliceBin;
+      const levelLabel=Number.isFinite(this.selectedLevel)?this.selectedLevel:this.levels;
+      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax} | sel ω${omegaLabel} L${levelLabel}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
       ctx.restore();
     }
     _drawOmegaLevelCursor({x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax}){
-      const omega=clamp(Math.round(this.selectedOmega),1,cols-1);
-      const level=clamp(Math.round(this.selectedLevel),Lmin,resolvedLmax);
+      const omegaValue=Number.isFinite(this.selectedOmega)?this.selectedOmega:this.cubeSliceBin;
+      const levelValue=Number.isFinite(this.selectedLevel)?this.selectedLevel:this.levels;
+      const omega=clamp(Math.round(omegaValue),1,cols-1);
+      const level=clamp(Math.round(levelValue),Lmin,resolvedLmax);
       const cursorX=x0+omega*cellSize;
       const cursorRow=level-Lmin;
       if(cursorRow<0||cursorRow>=rows) return;
@@ -1772,7 +1776,12 @@
     }
   }
 
-  new App();
+  const startApp=()=>new App();
+  if(document.readyState==="loading"){
+    document.addEventListener("DOMContentLoaded",startApp,{once:true});
+  }else{
+    startApp();
+  }
 })();
 </script>
 </body>
