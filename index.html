@@ -104,6 +104,9 @@
         <button id="pauseEmergent" class="btn-warning" disabled>Pause Emergent</button>
         <button id="stepBack" class="btn-neutral" title="Step Back (,) " disabled>Step ◀</button>
         <button id="stepForward" class="btn-neutral" title="Step Forward (.)" disabled>Step ▶</button>
+        <button id="toggleSnap" class="btn-neutral" aria-pressed="false">
+          Snap: 360/(2n)
+        </button>
       </div>
     </div>
 
@@ -218,6 +221,8 @@
       this.speedInput=document.getElementById('speedInput');
       this.speedPlus=document.getElementById('speedPlus'); this.speedMinus=document.getElementById('speedMinus'); this.toggleRotationBtn=document.getElementById('toggleRotation'); this.toggleEmergentBtn=document.getElementById('toggleEmergent'); this.pauseEmergentBtn=document.getElementById('pauseEmergent');
       this.stepBackBtn=document.getElementById('stepBack'); this.stepForwardBtn=document.getElementById('stepForward');
+      this.snapRotation=false;
+      this.toggleSnapBtn=document.getElementById('toggleSnap');
       this.stepBackBtn.addEventListener('click',()=>this._emergentStep(-1)); this.stepForwardBtn.addEventListener('click',()=>this._emergentStep(+1));
       this.zoomInBtn=document.getElementById('zoomIn'); this.zoomOutBtn=document.getElementById('zoomOut'); this.resetViewBtn=document.getElementById('resetView'); this.viewPortalBtn=document.getElementById('viewPortal');
       this.panLeftBtn=document.getElementById('panLeft'); this.panRightBtn=document.getElementById('panRight'); this.panUpBtn=document.getElementById('panUp'); this.panDownBtn=document.getElementById('panDown');
@@ -288,6 +293,14 @@
       this.toggleRotationBtn.addEventListener('click',()=>this._toggleRotation());
       this.toggleEmergentBtn.addEventListener('click',()=>this._toggleEmergent());
       this.pauseEmergentBtn.addEventListener('click',()=>this._togglePauseEmergent());
+      this.toggleSnapBtn.addEventListener('click',()=>{
+        this.snapRotation=!this.snapRotation;
+        this.toggleSnapBtn.setAttribute('aria-pressed',String(this.snapRotation));
+        this.toggleSnapBtn.textContent=this.snapRotation
+          ? 'Snap: ON (360/2n)'
+          : 'Snap: 360/(2n)';
+        this._render();
+      });
       this.zoomInBtn.addEventListener('click',()=>this._zoomAtCanvasPoint(1.1));
       this.zoomOutBtn.addEventListener('click',()=>this._zoomAtCanvasPoint(0.9));
       this.resetViewBtn.addEventListener('click',()=>this._resetView());
@@ -362,7 +375,12 @@
     }
 
     _updateButtonsEnabled(){this.viewPortalBtn.disabled=this.levels<1; this.pauseEmergentBtn.disabled=!this.emergentActive; const step=this.emergentActive&&this.emergentPaused; this.stepBackBtn.disabled=!step; this.stepForwardBtn.disabled=!step}
-    _emergentStep(dir){if(!(this.emergentActive&&this.emergentPaused)){this._statusMsg("Step: pause Emergent first."); return} this.emergentAngle+=dir*(Math.PI/180); this._render()}
+    _emergentStep(dir){
+      if(!(this.emergentActive&&this.emergentPaused)){this._statusMsg("Step: pause Emergent first."); return}
+      const step=this.snapRotation?(Math.PI/this.sides):(Math.PI/180);
+      this.emergentAngle+=dir*step;
+      this._render();
+    }
 
     _syncSpeedField(){
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -401,25 +419,38 @@
     _paletteDistinct(seedCount,L,a0,R){const base=buildHsvPalette(seedCount), a=a0*Math.pow(.82,Math.max(0,L-1)), seed=base.map(([r,g,b,_])=>rgbaStr(r,g,b,a)), out=[]; for(let s=0;s<R;s++) out.push(...seed); return out}
     _currentColorArray(allTris){const L=Math.max(0,this.levels|0), seed=this.gen.activeSeedTris(), seedCount=seed.length, R=(L===0)?1:this.sides, T=seedCount*R; if(this.edgesOnly||T===0) return new Array(allTris.length).fill(null); const a=this.alpha; if(this.colorMode==='by_level'){const arr=this._paletteByLevel(L,seedCount,a); return allTris.map((_,i)=>arr[i%arr.length])} else {const arr=this._paletteDistinct(seedCount,L,a,R); return allTris.map((_,i)=>arr[i%arr.length])}}
     _lineWidthPx(){return Math.max(.5,2/(this.levels+1))}
+    _snapAngle(theta){
+      if(!this.snapRotation) return theta;
+      const step=Math.PI/this.sides;
+      return Math.round(theta/step)*step;
+    }
 
     _drawFrame(dtSec){
       const ctx=this.ctx,w=this.canvas.clientWidth,h=this.canvas.clientHeight; ctx.fillStyle=this.whiteBg?'#fff':'#000'; ctx.fillRect(0,0,w,h);
       const L=Math.max(0,this.levels|0);
       if(this.emergentActive){
         if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        const angle=this._snapAngle(this.emergentAngle);
         if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
         const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
         const rotated=new Array(seed.length);
-        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,this.emergentAngle),rotatePointAround(tri[1],c,this.emergentAngle),rotatePointAround(tri[2],c,this.emergentAngle)]}
+        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
         let allTris;
         if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
         return;
       } else if(this.rotationActive){
-        if(this.gen.level_tris[L]===null){ this.globalAngle+=this.rotationSpeed*(Math.PI/180); const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length) this._drawDeferred(seed,pivot,this.globalAngle); return }
+        if(this.gen.level_tris[L]===null){
+          this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          const angle=this._snapAngle(this.globalAngle);
+          const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
+          if(seed&&seed.length) this._drawDeferred(seed,pivot,angle);
+          return;
+        }
         this.globalAngle+=this.rotationSpeed*(Math.PI/180);
-        const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,this.globalAngle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+        const angle=this._snapAngle(this.globalAngle);
+        const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
         return;
       } else {
