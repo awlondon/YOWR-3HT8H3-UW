@@ -253,6 +253,7 @@
       this._liveSpecLastTs=0;
       this._liveSpecHead=0;
       this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(this.liveSpecBins/2));
+      this._livePeaks=new Map();
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -676,10 +677,32 @@
 
       const mag=this._fftMagnitude(sig);
 
+      const alpha=0.25;
+      const prev=this._liveSpecBuf[(this._liveSpecHead-1+this.liveSpecRows)%this.liveSpecRows];
+      for(let i=1;i<mag.length;i++){
+        mag[i]=prev ? alpha*mag[i]+(1-alpha)*prev[i] : mag[i];
+      }
+
       let mx=0;
       for(let i=1;i<mag.length;i++) if(mag[i]>mx) mx=mag[i];
       if(mx>1e-9){
         for(let i=1;i<mag.length;i++) mag[i]/=mx;
+      }
+
+      const topK=3;
+      const peaks=[...mag.entries()]
+        .slice(1)
+        .sort((a,b)=>b[1]-a[1])
+        .slice(0,topK);
+      const peakBins=new Set(peaks.map(([bin])=>bin));
+      for(const [bin] of peaks){
+        this._livePeaks.set(bin,(this._livePeaks.get(bin)||0)+1);
+      }
+      for(const [bin,count] of this._livePeaks.entries()){
+        if(peakBins.has(bin)) continue;
+        const next=count-1;
+        if(next<=0) this._livePeaks.delete(bin);
+        else this._livePeaks.set(bin,next);
       }
 
       this._liveSpecBuf[this._liveSpecHead].set(mag);
@@ -700,6 +723,16 @@
       const x0=16;
       const y0=this.canvas.clientHeight-h-16;
 
+      const fMin=1;
+      const fMax=cols-1;
+      const log=(x)=>Math.log(x);
+      const lxMin=log(fMin);
+      const lxMax=log(fMax);
+      const freqToX=(c)=>{
+        const u=(log(c)-lxMin)/(lxMax-lxMin);
+        return x0+u*w;
+      };
+
       ctx.save();
       ctx.globalAlpha=0.95;
 
@@ -716,17 +749,25 @@
           const v=row[c];
           if(v<=0) continue;
 
+          const px=freqToX(c);
           const intensity=Math.min(255,(v*255)|0);
           ctx.fillStyle=this.whiteBg
             ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
             : `rgb(${intensity},${intensity},${intensity})`;
 
-          ctx.fillRect(x0+c*cell,y0+r*cell,cell,cell);
+          ctx.fillRect(px,y0+r*cell,cell,cell);
         }
       }
 
       ctx.globalAlpha=1;
       ctx.fillStyle=this.whiteBg?'#000':'#fff';
+      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      const labelThreshold=8;
+      for(const [bin,count] of this._livePeaks.entries()){
+        if(count<labelThreshold||bin<=0||bin>=cols) continue;
+        const px=freqToX(bin);
+        ctx.fillText(`ω${bin}`,px+2,y0-4);
+      }
       ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
       ctx.fillText(`Live FFT (Emergent) | k=${this.liveSpecEntityK} | bins=${cols}`,x0,y0-10);
 
