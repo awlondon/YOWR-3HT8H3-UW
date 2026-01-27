@@ -345,6 +345,9 @@
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.activeEntityK=0;
       this.entityFocusActive=false;
+      this.entityRevealActive=false;
+      this.entityRevealRequest=null;
+      this.entityRevealDurationMs=3800;
       this.primaryView="omega-level";
       this.cubeSliceBin=6;
       this.selectedOmega=this.cubeSliceBin;
@@ -602,9 +605,10 @@
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
     _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this.entityFocusActive=false; this._zoomToDesignExtent(); this._render()}
+    _resetView(){this.entityFocusActive=false; this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render()}
     _viewPortal(){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
+      this._stopEntityRevealTour();
       const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
       let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
       if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
@@ -1983,41 +1987,14 @@
       const n=this.sides;
       if(n<3) return;
 
-      const L=this.levels;
-      const pivot=this.gen.activePivot();
-
       const theta0=canonicalStartAngle(n);
       const dTheta=TAU/n;
 
       const kk=((k%n)+n)%n;
-      const thetaA=theta0+kk*dTheta;
-      const thetaC=thetaA+dTheta/2;
-
-      let rMin=this.radius;
-      if(L>=2){
-        rMin=this.radius*multiplier(L,n);
-      }
-
-      let rMax=rMin;
-      if(L>=2){
-        let acc=0;
-        for(let cur=2;cur<=L;cur++){
-          const rf=(n%2===1)?Math.cos(Math.PI/n):1;
-          acc+=this.radius*multiplier(cur,n)*rf;
-        }
-        rMax=acc;
-      }
-
-      const rFocus=Math.sqrt(Math.max(1e-6,rMin*rMax));
-
-      const fx=pivot[0]+Math.cos(thetaC)*rFocus;
-      const fy=pivot[1]+Math.sin(thetaC)*rFocus;
-
-      const chordW=2*rFocus*Math.sin(dTheta/2);
-      const radialH=Math.max(1e-6,rMax-rMin);
-      const extent=Math.max(chordW,radialH)*1.25;
-
-      const targetRect=[fx-extent,fy-extent,fx+extent,fy+extent];
+      const {rMax}=this._entityRadiusBounds();
+      const rFar=Math.max(0.01,rMax);
+      const rNear=Math.max(rFar*0.02,0.005);
+      const targetRect=this._portalRectForEntity(kk,rNear,rFar,{radial:0.08,tangential:0.2});
 
       this.entityIndex=kk;
       this.activeEntityK=kk;
@@ -2025,14 +2002,16 @@
       this.entityFocusActive=true;
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
+      this._stopEntityRevealTour();
 
       if(!animate){
         this._zoomToRect(targetRect);
         this._render();
+        this._startEntityRevealTour(kk,rNear,rFar);
         return;
       }
 
-      this._animateZoomToRect(targetRect,420);
+      this._animateZoomToRect(targetRect,420,()=>this._startEntityRevealTour(kk,rNear,rFar));
     }
     _advanceEntity(dir){
       const n=this.sides;
@@ -2131,10 +2110,26 @@
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
-    _zoomToDesignExtent(){const tris=this.gen.activeTriangles(), ext=this._trianglesExtent(tris); if(!ext){this._centerCanvas();return} const [xmin,xmax,ymin,ymax]=ext, mx=(xmax-xmin)*.10, my=(ymax-ymin)*.10; this._zoomToRect([xmin-mx,ymin-my,xmax+mx,ymax+mx])}
+    _zoomToDesignExtent(){const tris=this.gen.activeTriangles(), ext=this._trianglesExtent(tris); if(!ext){this._centerCanvas();return} const [xmin,xmax,ymin,ymax]=ext, mx=(xmax-xmin)*.10, my=(ymax-ymin)*.10; this._zoomToRect([xmin-mx,ymin-my,xmax+mx,ymax+my])}
     _centerCanvas(){this.scale=1; this.tx=this.canvas.clientWidth/2; this.ty=this.canvas.clientHeight/2}
-    _zoomToRect([xmin,ymin,xmax,ymax]){const wpx=this.canvas.clientWidth,hpx=this.canvas.clientHeight, ww=(xmax-xmin), wh=(ymax-ymin); if(!(ww>0&&wh>0))return; const sx=(wpx*.85)/(ww*200), sy=(hpx*.85)/(wh*200); this.scale=Math.min(sx,sy); const cx=(xmin+xmax)/2, cy=(ymin+ymax)/2, sp=this._worldToScreen([cx,cy]); this.tx+=(wpx/2-sp[0]); this.ty+=(hpx/2-sp[1])}
-    _animateZoomToRect(rect,durationMs=400){
+    _computeZoomTarget([xmin,ymin,xmax,ymax]){
+      const wpx=this.canvas.clientWidth,hpx=this.canvas.clientHeight, ww=(xmax-xmin), wh=(ymax-ymin);
+      if(!(ww>0&&wh>0)) return null;
+      const sx=(wpx*.85)/(ww*200), sy=(hpx*.85)/(wh*200);
+      const scale=Math.min(sx,sy);
+      const cx=(xmin+xmax)/2, cy=(ymin+ymax)/2;
+      const tx=wpx/2 - cx*(200*scale);
+      const ty=hpx/2 + cy*(200*scale);
+      return {scale,tx,ty};
+    }
+    _zoomToRect(rect){
+      const target=this._computeZoomTarget(rect);
+      if(!target) return;
+      this.scale=target.scale;
+      this.tx=target.tx;
+      this.ty=target.ty;
+    }
+    _animateZoomToRect(rect,durationMs=400,onDone){
       const startScale=this.scale;
       const startTx=this.tx;
       const startTy=this.ty;
@@ -2161,9 +2156,74 @@
 
         this._render();
         if(u<1) requestAnimationFrame(step);
+        else if(typeof onDone==="function") onDone();
       };
 
       requestAnimationFrame(step);
+    }
+
+    _portalRectForEntity(k,rNear,rFar,padFactor={radial:0.08,tangential:0.2}){
+      const n=this.sides;
+      const pivot=this.gen.activePivot();
+      const theta0=canonicalStartAngle(n);
+      const dTheta=TAU/n;
+      const kk=((k%n)+n)%n;
+      const a0=theta0+kk*dTheta;
+      const a1=a0+dTheta;
+      const polar=(a,r)=>[pivot[0]+Math.cos(a)*r, pivot[1]+Math.sin(a)*r];
+      const pts=[polar(a0,rNear),polar(a1,rNear),polar(a0,rFar),polar(a1,rFar)];
+      let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
+      for(const [x,y] of pts){if(x<xmin)xmin=x; if(x>xmax)xmax=x; if(y<ymin)ymin=y; if(y>ymax)ymax=y;}
+      const thetaC=a0+dTheta/2;
+      const radial=[Math.cos(thetaC),Math.sin(thetaC)];
+      const tangential=[-radial[1],radial[0]];
+      const tangentialSpan=Math.max(1e-6,2*rFar*Math.sin(dTheta/2));
+      const radialSpan=Math.max(1e-6,rFar-rNear);
+      const radialPad=radialSpan*(padFactor?.radial??0.08);
+      const tangentialPad=tangentialSpan*(padFactor?.tangential??0.2);
+      const padX=Math.abs(radial[0])*radialPad+Math.abs(tangential[0])*tangentialPad;
+      const padY=Math.abs(radial[1])*radialPad+Math.abs(tangential[1])*tangentialPad;
+      return [xmin-padX,ymin-padY,xmax+padX,ymax+padY];
+    }
+
+    _startEntityRevealTour(k,rNear,rFar){
+      if(!isFinite(rNear)||!isFinite(rFar)||!(rFar>0)) return;
+      this._stopEntityRevealTour();
+      const start=performance.now();
+      const duration=this.entityRevealDurationMs;
+      const ease=(t)=>t*t*(3-2*t);
+      this.entityRevealActive=true;
+      const step=(now)=>{
+        if(!this.entityRevealActive) return;
+        const u=clamp((now-start)/duration,0,1);
+        const e=ease(u);
+        const r=rNear+(rFar-rNear)*e;
+        const bandNear=Math.max(0.0005,r*0.98);
+        const bandFar=Math.max(bandNear+0.0005,r);
+        const rect=this._portalRectForEntity(k,bandNear,bandFar,{radial:0.04,tangential:0.22});
+        const target=this._computeZoomTarget(rect);
+        if(target){
+          const panWeight=0.35;
+          const scaleWeight=0.18;
+          this.scale+= (target.scale-this.scale)*scaleWeight;
+          this.tx+= (target.tx-this.tx)*panWeight;
+          this.ty+= (target.ty-this.ty)*panWeight;
+          this._render();
+        }
+        if(u<1){
+          this.entityRevealRequest=requestAnimationFrame(step);
+        } else {
+          this.entityRevealActive=false;
+        }
+      };
+      this.entityRevealRequest=requestAnimationFrame(step);
+    }
+    _stopEntityRevealTour(){
+      if(this.entityRevealRequest){
+        cancelAnimationFrame(this.entityRevealRequest);
+        this.entityRevealRequest=null;
+      }
+      this.entityRevealActive=false;
     }
 
     _updateHeaderLabels(){
