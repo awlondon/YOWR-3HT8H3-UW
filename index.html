@@ -37,6 +37,7 @@
     .code-stack{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
     .help{color:var(--muted)} .status{color:var(--muted)}
+    .entity-label{font-size:12px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -124,6 +125,13 @@
         <button id="panUp">▲</button>
         <button id="panDown">▼</button>
         <button id="downloadPng" type="button" style="margin-left:auto;"></button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button id="entityPrev">Entity ◀</button>
+        <button id="entityNext">Entity ▶</button>
+        <button id="entityAuto" class="btn-neutral" aria-pressed="false">Auto-Advance</button>
+        <button id="entityLock" class="btn-neutral" aria-pressed="false">Lock Rotation</button>
+        <span class="entity-label" id="entityLabel">Entity —</span>
       </div>
     </div>
   </div>
@@ -226,12 +234,15 @@
       this.stepBackBtn.addEventListener('click',()=>this._emergentStep(-1)); this.stepForwardBtn.addEventListener('click',()=>this._emergentStep(+1));
       this.zoomInBtn=document.getElementById('zoomIn'); this.zoomOutBtn=document.getElementById('zoomOut'); this.resetViewBtn=document.getElementById('resetView'); this.viewPortalBtn=document.getElementById('viewPortal');
       this.panLeftBtn=document.getElementById('panLeft'); this.panRightBtn=document.getElementById('panRight'); this.panUpBtn=document.getElementById('panUp'); this.panDownBtn=document.getElementById('panDown');
+      this.entityPrevBtn=document.getElementById('entityPrev'); this.entityNextBtn=document.getElementById('entityNext');
+      this.entityAutoBtn=document.getElementById('entityAuto'); this.entityLockBtn=document.getElementById('entityLock'); this.entityLabel=document.getElementById('entityLabel');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
 
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
       this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
       this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
+      this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.fps=0; this._lastFrameTs=performance.now();
       this.scale=1; this.tx=0; this.ty=0; this.dragging=false; this.dragStart=[0,0]; this._popupShown=false;
       this.gen=new HLSFGenerator(this.center,this.radius,this.sides,this.levels);
@@ -241,7 +252,7 @@
 
       this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
-      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updatePlot(true);
+      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updatePlot(true);
       this._loop();
     }
 
@@ -305,6 +316,10 @@
       this.panRightBtn.addEventListener('click',()=>{this.tx+=50;this._render()});
       this.panUpBtn.addEventListener('click',()=>{this.ty-=50;this._render()});
       this.panDownBtn.addEventListener('click',()=>{this.ty+=50;this._render()});
+      this.entityPrevBtn.addEventListener('click',()=>this._advanceEntity(-1));
+      this.entityNextBtn.addEventListener('click',()=>this._advanceEntity(1));
+      this.entityAutoBtn.addEventListener('click',()=>this._toggleEntityAuto());
+      this.entityLockBtn.addEventListener('click',()=>this._toggleEntityLock());
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
       this.canvas.addEventListener('mousedown',e=>{this.dragging=true;this.dragStart=[e.clientX,e.clientY]});
       window.addEventListener('mousemove',e=>{if(!this.dragging)return; const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1]; this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render()});
@@ -327,7 +342,7 @@
 
     _bumpSides(d){const cur=parseInt(this.sidesInput.value||this.sides,10), n=Math.max(4,cur+d); this.sidesInput.value=String(n); this._applySides(n)}
     _applySidesFromInput(){const n=Math.max(4,parseInt(this.sidesInput.value||this.sides,10)); this._applySides(n)}
-    _applySides(n){this.sides=n; this.gen.setSides(n); this._popupShown=false; this._updatePlot(true); this._autoAlphaIfColors(); this._updateButtonsEnabled()}
+    _applySides(n){this.sides=n; this.gen.setSides(n); this._popupShown=false; this._updatePlot(true); this._autoAlphaIfColors(); this._updateButtonsEnabled(); this._updateEntityLabel()}
 
     setLevel(L){
       this.levels=L; this.gen.setLevels(L); this._popupShown=false;
@@ -335,6 +350,7 @@
       this._updatePlot(true); if(L>=3)this._viewPortal();
       this._updateButtonsEnabled(); this._markActiveLevel();
       this._updateSnapLabel();
+      this._updateEntityLabel();
     }
 
     _applyAlpha(){const a=parseFloat(this.alphaInput.value); if(!isFinite(a)||a<0||a>1)return; this.alpha=a; this._updatePlot(true)}
@@ -342,8 +358,12 @@
     _autoAlphaIfColors(){if(!this.edgesOnly)this._autoAlpha()}
     _toggleEdges(){this.edgesOnly=!this.edgesOnly; if(this.edgesOnly){this.alpha=.5; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true}else{this.toggleEdgesBtn.textContent="Show Outlines"; this._autoAlpha(); this.whiteBg=false} this._applyBg(); this._updatePlot(true); this._updateButtonsEnabled()}
     _toggleColorMode(){if(this.edgesOnly){this.edgesOnly=false; this.toggleEdgesBtn.textContent="Show Outlines"; this.whiteBg=false; this._applyBg()} this.colorMode=(this.colorMode==='by_level')?'distinct':'by_level'; this._autoAlpha(); this._updatePlot(true)}
-    _toggleRotation(){if(this.rotationActive){this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"} else {this.rotationActive=true; this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"; this.toggleRotationBtn.textContent="Stop Rotation"}}
+    _toggleRotation(){
+      if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
+      if(this.rotationActive){this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"} else {this.rotationActive=true; this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"; this.toggleRotationBtn.textContent="Stop Rotation"}
+    }
     _toggleEmergent(){
+      if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
       if(this.emergentActive){this.emergentActive=false; this.emergentPaused=false; this.snapMode=0; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"}
       else{this.emergentActive=true; this.rotationActive=false; this.snapMode=2; this.toggleRotationBtn.textContent="Start Rotation"; this.toggleEmergentBtn.textContent="Stop Emergent Rotation"; this.pauseEmergentBtn.disabled=false; this._lastFrameTs=performance.now()}
       this._updateButtonsEnabled(); this._updateHeaderLabels(); this._updateStatus(); this._render();
@@ -413,6 +433,71 @@
 
       if(!wantDefer) this._zoomToDesignExtent();
       this._updateHeaderLabels(); this._updateStatus(); this._render();
+    }
+
+    _entityRadiusBounds(){
+      const n=this.sides, L=this.levels, rf=(n%2===1)?Math.cos(Math.PI/n):1;
+      if(L<=1){return {rMin:0, rMax:this.radius};}
+      let rMax=0;
+      for(let cur=2;cur<=L;cur++) rMax+=this.radius*multiplier(cur,n)*rf;
+      const rMin=this.radius*multiplier(L,n)*rf;
+      return {rMin:Math.max(0,rMin), rMax:Math.max(rMin,rMax)};
+    }
+    _updateEntityLabel(){
+      const n=this.sides;
+      if(this.entityIndex>=n) this.entityIndex%=n;
+      if(this.entityIndex<0) this.entityIndex=(this.entityIndex%n+n)%n;
+      if(this.entityLabel) this.entityLabel.textContent=`Entity ${this.entityIndex+1} / ${n}`;
+    }
+    _stopRotationsForEntity(){
+      if(this.rotationActive||this.emergentActive){
+        this.rotationActive=false;
+        this.emergentActive=false;
+        this.emergentPaused=false;
+        this.toggleRotationBtn.textContent="Start Rotation";
+        this.toggleEmergentBtn.textContent="Emergent Rotation";
+        this.pauseEmergentBtn.disabled=true;
+        this.pauseEmergentBtn.textContent="Pause Emergent";
+        this._updateButtonsEnabled();
+      }
+    }
+    _focusEntity(index){
+      const n=this.sides, span=TAU/n, theta0=canonicalStartAngle(n);
+      this.entityIndex=((index%n)+n)%n;
+      const {rMin,rMax}=this._entityRadiusBounds();
+      const pivot=this.gen.activePivot();
+      const thetaK=theta0+this.entityIndex*span, thetaC=thetaK+span/2;
+      const rFocus=(rMax>0)?(rMin>0?Math.sqrt(rMin*rMax):(rMax*0.5)):this.radius*0.5;
+      const focus=[pivot[0]+rFocus*Math.cos(thetaC), pivot[1]+rFocus*Math.sin(thetaC)];
+      const w=2*rFocus*Math.sin(span/2), h=(rMax-rMin);
+      const extent=Math.max(w,h,this.radius*0.2)*1.2;
+      this._zoomToRect([focus[0]-extent, focus[1]-extent, focus[0]+extent, focus[1]+extent]);
+      if(this.entityLockRotation) this._stopRotationsForEntity();
+      this._updateEntityLabel();
+      this._render();
+    }
+    _advanceEntity(dir){
+      const n=this.sides;
+      this.entityIndex=((this.entityIndex+dir)%n+n)%n;
+      this._focusEntity(this.entityIndex);
+    }
+    _toggleEntityAuto(){
+      this.entityAuto=!this.entityAuto;
+      this.entityAutoBtn.setAttribute('aria-pressed',String(this.entityAuto));
+      this.entityAutoBtn.textContent=this.entityAuto?"Auto-Advance: ON":"Auto-Advance";
+      if(this.entityAuto){
+        this._focusEntity(this.entityIndex);
+        this.entityAutoTimer=window.setInterval(()=>this._advanceEntity(1),this.entityAutoMs);
+      } else if(this.entityAutoTimer){
+        window.clearInterval(this.entityAutoTimer);
+        this.entityAutoTimer=null;
+      }
+    }
+    _toggleEntityLock(){
+      this.entityLockRotation=!this.entityLockRotation;
+      this.entityLockBtn.setAttribute('aria-pressed',String(this.entityLockRotation));
+      this.entityLockBtn.textContent=this.entityLockRotation?"Lock Rotation: ON":"Lock Rotation";
+      if(this.entityLockRotation) this._stopRotationsForEntity();
     }
 
     _worldToScreen([x,y]){const sx=x*(200*this.scale)+this.tx, sy=-y*(200*this.scale)+this.ty; return[sx,sy]}
