@@ -266,6 +266,9 @@
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.entityFocusActive=false;
       this.primaryView="omega-level";
+      this.selectedOmega=this.cubeSliceBin;
+      this.selectedLevel=this.levels;
+      this._omegaLevelPanel=null;
       // Live spectrogram (during Emergent)
       this.liveSpecEnabled=false;
       this.liveSpecEntityK=this.entityIndex ?? 0;
@@ -377,9 +380,18 @@
       }
       this.specFileInput.addEventListener('change',e=>this._handleSpecImportFile(e));
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
-      this.canvas.addEventListener('mousedown',e=>{this.dragging=true;this.dragStart=[e.clientX,e.clientY]});
-      window.addEventListener('mousemove',e=>{if(!this.dragging)return; const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1]; this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render()});
+      this.canvas.addEventListener('mousedown',e=>{this.dragging=true; this.dragMoved=false; this.dragStart=[e.clientX,e.clientY]});
+      window.addEventListener('mousemove',e=>{
+        if(!this.dragging)return;
+        const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1];
+        if(Math.hypot(dx,dy)>3) this.dragMoved=true;
+        this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render();
+      });
       window.addEventListener('mouseup',()=>{this.dragging=false});
+      this.canvas.addEventListener('click',e=>{
+        if(this.dragMoved) return;
+        this._handleOmegaLevelClick(e.clientX,e.clientY);
+      });
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
       window.addEventListener('keydown',e=>{
         const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
@@ -437,6 +449,7 @@
 
     setLevel(L){
       this.levels=L; this.gen.setLevels(L); this._popupShown=false;
+      this.selectedLevel=L;
       if(this.levels===0){this.edgesOnly=true; this.whiteBg=true; this.alpha=0.34; this.toggleEdgesBtn.textContent="Show Colors"} else {this._autoAlphaIfColors()}
       this._updatePlot(true); if(L>=3)this._viewPortal();
       this._updateButtonsEnabled(); this._markActiveLevel();
@@ -506,6 +519,8 @@
         levelsMax:this._specMeta?.levelsMax??this.levels,
         sides:this.sides,
         bins,
+        selectedOmega:this.selectedOmega,
+        selectedLevel:this.selectedLevel,
         frames:this._specFrames.map(f=>({t:f.t,fft:Array.from(f.bins),level:f.level}))
       };
 
@@ -539,10 +554,21 @@
         levels:typeof data.levels==="number"?data.levels:this.levels,
         levelsMax:typeof data.levelsMax==="number"?data.levelsMax:(typeof data.levels==="number"?data.levels:this.levels),
         sides:typeof data.sides==="number"?data.sides:this.sides,
-        bins:binsHalf>0?binsHalf:(this.liveSpecBins/2)
+        bins:binsHalf>0?binsHalf:(this.liveSpecBins/2),
+        selectedOmega:typeof data.selectedOmega==="number"?data.selectedOmega:this.selectedOmega,
+        selectedLevel:typeof data.selectedLevel==="number"?data.selectedLevel:this.selectedLevel
       };
 
       if(typeof this._specMeta.entityK==="number") this.liveSpecEntityK=this._specMeta.entityK;
+      if(typeof this._specMeta.selectedOmega==="number"){
+        this.selectedOmega=this._specMeta.selectedOmega;
+        this.cubeSliceBin=clamp(Math.round(this.selectedOmega),1,this._resolveSliceBinLimit()-1);
+        this._syncSliceBinField();
+      }
+      if(typeof this._specMeta.selectedLevel==="number"){
+        this.selectedLevel=this._specMeta.selectedLevel;
+        this.setLevel(Math.round(this.selectedLevel));
+      }
       this._specRecording=false;
       this._specReplayActive=false;
       this._updateSpecInfo();
@@ -607,7 +633,9 @@
         levels:this.levels,
         levelsMax:this.levels,
         sides:this.sides,
-        bins:this.liveSpecBins/2
+        bins:this.liveSpecBins/2,
+        selectedOmega:this.selectedOmega,
+        selectedLevel:this.selectedLevel
       };
       this._updateSpecInfo();
     }
@@ -664,6 +692,7 @@
       if (!Number.isFinite(v)) { this._syncSliceBinField(); return; }
       const limit=this._resolveSliceBinLimit();
       this.cubeSliceBin=clamp(v,1,limit-1);
+      this.selectedOmega=this.cubeSliceBin;
       this._syncSliceBinField();
       this._render();
     }
@@ -868,6 +897,7 @@
 
       const x0=16;
       const y0=this.canvas.clientHeight-h-16;
+      this._omegaLevelPanel={x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax};
 
       ctx.save();
       ctx.globalAlpha=0.95;
@@ -924,12 +954,14 @@
         const cursorCol=Math.round((t/duration)*(cols-1));
         const cursorX=x0+cursorCol*cellSize;
         ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-        ctx.globalAlpha=0.75;
+        ctx.globalAlpha=0.25;
         ctx.beginPath();
         ctx.moveTo(cursorX,y0-6);
         ctx.lineTo(cursorX,y0+h+6);
         ctx.stroke();
       }
+
+      this._drawOmegaLevelCursor({x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax});
 
       ctx.globalAlpha=1;
       ctx.fillStyle=this.whiteBg?'#000':'#fff';
@@ -938,8 +970,55 @@
       const stability=this._computeStabilityScore(spec);
       const stabilityLabel=Number.isFinite(stability)?` | stability=${stability.toFixed(2)}`:'';
       const emergenceLabel=(emergence!==null)?` | emergence=L${emergence}`:'';
-      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
+      ctx.fillText(`ω–L (Primary) | k=${k} | L=${Lmin}-${resolvedLmax} | sel ω${this.selectedOmega} L${this.selectedLevel}${stabilityLabel}${emergenceLabel}`,x0,y0-10);
       ctx.restore();
+    }
+    _drawOmegaLevelCursor({x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax}){
+      const omega=clamp(Math.round(this.selectedOmega),1,cols-1);
+      const level=clamp(Math.round(this.selectedLevel),Lmin,resolvedLmax);
+      const cursorX=x0+omega*cellSize;
+      const cursorRow=level-Lmin;
+      if(cursorRow<0||cursorRow>=rows) return;
+
+      const cursorY=y0+cursorRow*cellSize;
+      const ctx=this.ctx;
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.globalAlpha=0.85;
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(cursorX,y0-6);
+      ctx.lineTo(cursorX,y0+h+6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x0-6,cursorY+cellSize/2);
+      ctx.lineTo(x0+w+6,cursorY+cellSize/2);
+      ctx.stroke();
+      ctx.globalAlpha=0.9;
+      ctx.strokeRect(x0-6,cursorY-1,w+12,cellSize+2);
+      ctx.globalAlpha=1;
+    }
+    _handleOmegaLevelClick(clientX,clientY){
+      if(this.primaryView!=="omega-level") return;
+      if(!this._omegaLevelPanel) return;
+      const rect=this.canvas.getBoundingClientRect();
+      const x=clientX-rect.left;
+      const y=clientY-rect.top;
+      const {x0,y0,w,h,cellSize,cols,rows,Lmin,resolvedLmax}=this._omegaLevelPanel;
+      if(x<x0||x>x0+w||y<y0||y>y0+h) return;
+      const localX=x-x0;
+      const localY=y-y0;
+      const omegaBin=clamp(Math.round(localX/cellSize),1,cols-1);
+      const level=clamp(Math.round(localY/cellSize)+Lmin,Lmin,resolvedLmax);
+      this.onOmegaLevelClick({omegaBin,level});
+    }
+    onOmegaLevelClick({omegaBin,level}){
+      this.selectedOmega=omegaBin;
+      this.selectedLevel=level;
+      this.cubeSliceBin=omegaBin;
+      this._syncSliceBinField();
+      this.setLevel(level);
+      this.focusEntity(this.entityIndex,{animate:false});
+      this._render();
     }
     _computeStabilityScore(spec){
       if(!spec||!spec.length) return null;
