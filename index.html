@@ -769,11 +769,11 @@ this._ridgeHold.set(
         this.toggleAudioBtn.textContent=this.audioEnabled?"Audio: On":"Audio: Off";
       }
       if(this.toggleLiveFftBtn){
-        this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.liveSpecEnabled));
-        this.toggleLiveFftBtn.textContent=this.liveSpecEnabled?"Live FFT: On":"Live FFT: Off";
+        this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.oscilloscopeVisible));
+        this.toggleLiveFftBtn.textContent=this.oscilloscopeVisible?"Live FFT: On":"Live FFT: Off";
       }
       if(this.audio?.setMonitorEnabled){
-        this.audio.setMonitorEnabled(this.audioEnabled && this.liveSpecEnabled);
+        this.audio.setMonitorEnabled(this.audioEnabled);
       }
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
@@ -883,9 +883,11 @@ this._ridgeHold.set(
       this.audioEnabled=next;
       if(this.audioEnabled){
         this.liveSpecEnabled=true;
+        this.oscilloscopeVisible=true;
         await this._bootAudio();
       } else {
         this.liveSpecEnabled=false;
+        this.oscilloscopeVisible=false;
         this.audio.setEnabled(false);
       }
       const label=this.audioEnabled?"Audio enabled":"Audio muted";
@@ -897,14 +899,10 @@ this._ridgeHold.set(
       await this.setAudioEnabled(!this.audioEnabled);
     }
     _toggleLiveFft(){
-      this.liveSpecEnabled=!this.liveSpecEnabled;
-      this._statusMsg(this.liveSpecEnabled?"Live FFT: ON (Emergent)":"Live FFT: OFF");
-      if(this.liveSpecEnabled){
-        if(this.emergentActive) this._startSpectrogramRecording();
-      } else {
-        this._specRecording=false;
-        this._specReplayActive=false;
-        this._updateSpecInfo();
+      this.oscilloscopeVisible=!this.oscilloscopeVisible;
+      this._statusMsg(this.oscilloscopeVisible?"Live FFT: Visible":"Live FFT: Hidden");
+      if(this.emergentActive && this.liveSpecEnabled){
+        this._startSpectrogramRecording();
       }
       this._applyPanelLayout();
       this._render();
@@ -929,6 +927,7 @@ this._ridgeHold.set(
           if(!this.audioEnabled){
             this.audioEnabled=true;
             this.liveSpecEnabled=true;
+            this.oscilloscopeVisible=true;
             this._syncAudioUi();
           }
           await this._ensureAudioStarted();
