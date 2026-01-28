@@ -109,10 +109,22 @@
         <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
         <div class="code-stack">
           <div class="code-label" id="codeLabel">—</div>
+          <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+          <button id="audioStatus"
+            style="
+              padding:4px 8px;
+              border-radius:6px;
+              font-size:12px;
+              cursor:pointer;
+              border:1px solid var(--border);
+              background:#400;
+              color:#fff;
+            ">
+            🔇 Audio OFF
+          </button>
           <details class="meta-details">
             <summary>Diagnostics</summary>
             <div class="meta-popover">
-              <div class="code-label" id="graphStats">nodes: — | adj: —</div>
               <div style="display:flex;align-items:center;gap:8px">
                 <span class="status">RMS</span>
                 <div id="rmsTrack" style="width:140px;height:10px;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#0f0f0f">
@@ -208,7 +220,7 @@
             </div>
           </div>
           <div class="row" style="margin-top:8px;">
-            <span class="status" id="audioStatus">Audio muted</span>
+            <span class="status" id="audioStatusText">Audio muted</span>
           </div>
           <div class="row" style="margin-top:8px;">
             <span class="status">Default volume is intentionally low for safety.</span>
@@ -533,7 +545,8 @@ this._ridgeHold.set(
       this.toggleAudioBtn=document.getElementById('toggleAudio');
       this.toggleLiveFftBtn=document.getElementById('toggleLiveFft');
       this.cycleLiveEntityBtn=document.getElementById('cycleLiveEntity');
-      this.audioStatusEl=document.getElementById('audioStatus');
+      this.audioStatusBtn=document.getElementById('audioStatus');
+      this.audioStatusTextEl=document.getElementById('audioStatusText');
       this.volumeSlider=document.getElementById('volumeSlider');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
@@ -655,6 +668,7 @@ this._ridgeHold.set(
       this._audioWavetable=null;
       this._audioSpeed=1;
       this._lastAudioMag=null;
+      this._audioStatusHooked=false;
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -669,6 +683,7 @@ this._ridgeHold.set(
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._syncAudioUi();
+      this._updateAudioStatus();
       this._applyVolumeFromSlider();
       this._loop();
     }
@@ -746,8 +761,8 @@ this._ridgeHold.set(
         this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.liveSpecEnabled));
         this.toggleLiveFftBtn.textContent=this.liveSpecEnabled?"Live FFT: On":"Live FFT: Off";
       }
-      if(this.audioStatusEl){
-        this.audioStatusEl.textContent=this.audioEnabled?"Audio enabled":"Audio muted";
+      if(this.audioStatusTextEl){
+        this.audioStatusTextEl.textContent=this.audioEnabled?"Audio enabled":"Audio muted";
       }
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
@@ -787,6 +802,7 @@ this._ridgeHold.set(
       this.audio.setEnabled(true);
       this._applyVolumeFromSlider();
       this._refreshAudioParams();
+      this._updateAudioStatus();
     }
     async _toggleAudio(){
       this.audioEnabled=!this.audioEnabled;
@@ -833,9 +849,27 @@ this._ridgeHold.set(
       const armAudio=async()=>{
         if(!this.audioEnabled) return;
         await this._bootAudio();
+        this._updateAudioStatus();
       };
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
+      window.addEventListener('pointerdown',async()=>{
+        const audioCtx=this.audio?.ctx;
+        if(audioCtx && audioCtx.state!=='running'){
+          await audioCtx.resume();
+          this._updateAudioStatus();
+        }
+      },{once:true});
+      if(this.audioStatusBtn){
+        this.audioStatusBtn.addEventListener('click',async()=>{
+          const audioCtx=this.audio?.ctx;
+          if(!audioCtx) return;
+          if(audioCtx.state!=='running'){
+            await audioCtx.resume();
+          }
+          this._updateAudioStatus();
+        });
+      }
       window.addEventListener('resize',()=>this._handleLayoutChange(),{passive:true});
       this.nMinus.addEventListener('click',()=>this._bumpSides(-1));
       this.nPlus.addEventListener('click',()=>this._bumpSides(+1));
@@ -1081,7 +1115,7 @@ this._ridgeHold.set(
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
     _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render(); this._refreshAudioParams()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._refreshAudioParams(); this._updateModeIndicator()}
+    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._refreshAudioParams(); this._updateModeIndicator(); this._updateAudioStatus()}
     _viewPortal(){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
       this._stopEntityRevealTour();
@@ -1174,6 +1208,7 @@ this._ridgeHold.set(
       this._specReplayActive=false;
       this._updateSpecInfo();
       this._statusMsg(`Loaded spectrogram session (${this._specFrames.length} frames).`);
+      this._updateAudioStatus();
       this._render();
     }
 
@@ -1199,6 +1234,7 @@ this._ridgeHold.set(
       this._livePeaks.clear();
       this._ridgeHold.clear();
       this._statusMsg(`Replaying spectrogram session (${this._specFrames.length} frames).`);
+      this._updateAudioStatus();
       this._render();
     }
 
@@ -1781,7 +1817,7 @@ this._ridgeHold.set(
       if(cumulative>=0.9999){ if(!this.edgesOnly){this.edgesOnly=true; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true; this._applyBg()} this.toggleEdgesBtn.disabled=true } else { this.toggleEdgesBtn.disabled=false }
 
       if(!wantDefer) this._zoomToDesignExtent();
-      this._updateHeaderLabels(); this._updateStatus(); this._render(); this._refreshAudioParams();
+      this._updateHeaderLabels(); this._updateStatus(); this._render(); this._refreshAudioParams(); this._updateAudioStatus();
     }
 
     _entityRadiusBounds(){
