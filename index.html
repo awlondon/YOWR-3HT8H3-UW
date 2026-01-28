@@ -1116,6 +1116,7 @@ this._ridgeHold.set(
       const stride=Math.max(1,Math.floor(tris.length/this._audioMaxOsc));
       const w=[], a=[], p=[];
 
+      const levelWeight=this._levelWeight(this.levels);
       for(let i=0;i<tris.length;i+=stride){
         const tri=tris[i];
         const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
@@ -1127,7 +1128,10 @@ this._ridgeHold.set(
         const omega=TAU*f;
 
         // amplitude: small but increases with “visibility density”
-        const amp=1.0; // keep flat first; later: area*visibility weighting
+        const area=this._triangleArea(tri);
+        const vis=this._triangleVisibility(tri,[xmin,ymin,xmax,ymax]);
+        if(vis===0) continue;
+        const amp=Math.sqrt(area)*vis*levelWeight;
         const ph=Math.atan2(cy-pivot[1],cx-pivot[0]); // spatial phase
 
         w.push(omega);
@@ -1444,6 +1448,15 @@ this._ridgeHold.set(
       const [bx,by]=tri[1];
       const [cx,cy]=tri[2];
       return Math.abs((bx-ax)*(cy-ay)-(by-ay)*(cx-ax))/2;
+    }
+    _triangleVisibility(tri,view){
+      const [xmin,ymin,xmax,ymax]=view;
+      const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+      const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+      return (cx>=xmin&&cx<=xmax&&cy>=ymin&&cy<=ymax) ? 1 : 0;
+    }
+    _levelWeight(level){
+      return Math.pow(0.78, level);
     }
     _mapRadiusToOmega(r,{omegaMin=1,omegaMax=64,rMin=null,rMax=null}={}){
       const bounds=this._entityRadiusBounds();
