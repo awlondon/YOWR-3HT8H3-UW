@@ -7,7 +7,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.table = new Float32Array(0);
     this.speed = 1;
     this.gateThreshold = 0.02;
-    this.userVolume = 0.08;
+    this.userVolume = 1;
     this.minAudible = 0.0035;
     this.hpPrevX = 0;
     this.hpPrevY = 0;
