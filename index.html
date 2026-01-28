@@ -16,18 +16,13 @@
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
     .app{height:100vh;width:100vw;overflow:hidden}
-    #mainLayout{display:grid;grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) auto auto;height:100vh;width:100vw}
+    #mainLayout{display:grid;grid-template-rows:auto minmax(var(--hlsf-min),1fr) auto auto;height:100vh;overflow:hidden;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
-    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px auto}
-    #mainLayout.audio-off{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px 0px}
-    #mainLayout.spec-hidden #spectrogramPanel{display:none}
-    #mainLayout.audio-off #spectrogramPanel,
-    #mainLayout.audio-off #oscilloscopePanel{display:none}
-    #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto;grid-row:1}
-    #controlsPanel{grid-row:2}
-    #hlsfPanel{grid-row:3}
-    #spectrogramPanel{grid-row:4}
-    #oscilloscopePanel{grid-row:5}
+    #controlsWrap{grid-row:1;display:flex;flex-direction:column;min-height:0}
+    #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
+    #hlsfPanel{grid-row:2}
+    #spectrogramPanel{grid-row:3}
+    #oscilloscopePanel{grid-row:4}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
     .controls{display:flex;flex-direction:column;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
@@ -72,7 +67,6 @@
     .panel-spec{background:radial-gradient(ellipse at top, #0d1220, #05070c)}
     .panel-hlsf{background:#000}
     .panel-wave{background:#050505}
-    .panel canvas{position:absolute;inset:0}
     .spec-header{padding:12px;border-bottom:1px solid var(--border);background:#0b0f1a}
     .spec-controls{display:flex;flex-direction:column;gap:8px}
     .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -81,10 +75,11 @@
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
-    #hlsfCanvasWrap{position:relative;width:100%;height:100%;overflow:hidden;background:#000}
-    #hlsfCanvas{width:100%;height:100%}
-    #spectrogramPanel{overflow:hidden;min-height:var(--spec-min);max-height:var(--spec-max);height:clamp(var(--spec-min),18vh,var(--spec-max))}
-    #oscilloscopePanel{overflow:hidden;height:var(--scope-height)}
+    #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:300px;overflow:hidden;background:#000}
+    #hlsfCanvas{display:block;width:100%;height:100%}
+    #spectrogramPanel{overflow:hidden;min-height:140px;max-height:240px;height:clamp(140px,18vh,240px)}
+    #spectrogramPanel canvas{width:100%;height:100%}
+    #oscilloscopePanel{overflow:hidden;min-height:90px;max-height:140px;height:clamp(90px,12vh,140px)}
     .hlsf-overlay,
     .spectrogram-overlay,
     .debug-overlay{pointer-events:none}
@@ -110,8 +105,9 @@
 </head>
 <body>
 <div class="app" id="mainLayout">
-  <div id="topBar">
-    <header>
+  <div id="controlsWrap">
+    <div id="topBar">
+      <header>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
         <div class="code-stack">
@@ -143,11 +139,11 @@
           </details>
         </div>
       </div>
-    </header>
-  </div>
+      </header>
+    </div>
 
-  <div id="controlsPanel">
-    <div class="controls">
+    <div id="controlsPanel">
+      <div class="controls">
       <div class="tab-bar">
         <button class="tab-btn" data-tab="geometry" aria-selected="true">Geometry</button>
         <button class="tab-btn" data-tab="motion" aria-selected="false">Motion</button>
@@ -358,6 +354,7 @@ this._ridgeHold.set(
       <div class="status" id="status">Ready</div>
       <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>e</strong> export, <strong>i</strong> import, <strong>p</strong> replay, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
     </footer>
+    </div>
   </div>
 
   <div id="hlsfPanel" class="panel panel-hlsf">
@@ -816,21 +813,19 @@ this._ridgeHold.set(
         this.audioStatusTextEl.textContent=`${status} (${modeLabel})`;
       }
     }
-    _applyPanelLayout(){
-      const audioOff=!this.audioEnabled;
-      const hasSpectrogramSession=this.liveSpecEnabled||this._specReplayActive||Boolean(this._specFrames?.length);
-      if(this.layoutRoot){
-        this.layoutRoot.classList.toggle('audio-off',audioOff);
-        this.layoutRoot.classList.toggle('spec-hidden',!this.specPanelVisible||!hasSpectrogramSession||audioOff);
-      }
+    _updateAnalysisVisibility({hasSpectrogram,hasOscilloscope}){
       if(this.specPanel){
-        const showSpec=!audioOff&&this.specPanelVisible&&hasSpectrogramSession;
-        this.specPanel.style.display=showSpec?'block':'none';
+        this.specPanel.style.display=hasSpectrogram?'block':'none';
       }
       if(this.oscilloscopePanel){
-        const showScope=!audioOff&&hasSpectrogramSession;
-        this.oscilloscopePanel.style.display=showScope?'block':'none';
+        this.oscilloscopePanel.style.display=hasOscilloscope?'block':'none';
       }
+    }
+    _applyPanelLayout(){
+      const hasSpectrogramSession=this.liveSpecEnabled||this._specReplayActive||Boolean(this._specFrames?.length);
+      const hasSpectrogram=this.audioEnabled&&this.specPanelVisible&&hasSpectrogramSession;
+      const hasOscilloscope=this.audioEnabled&&hasSpectrogramSession;
+      this._updateAnalysisVisibility({hasSpectrogram,hasOscilloscope});
     }
     _applyVolumeFromSlider(){
       if(!this.volumeSlider) return;
@@ -900,6 +895,7 @@ this._ridgeHold.set(
         this._specReplayActive=false;
         this._updateSpecInfo();
       }
+      this._applyPanelLayout();
       this._render();
       this._syncAudioUi();
       this._handleLayoutChange();
@@ -1297,6 +1293,7 @@ this._ridgeHold.set(
       this._specRecording=false;
       this._specReplayActive=false;
       this._updateSpecInfo();
+      this._applyPanelLayout();
       this._statusMsg(`Loaded spectrogram session (${this._specFrames.length} frames).`);
       this._updateAudioStatus();
       this._render();
@@ -1324,6 +1321,7 @@ this._ridgeHold.set(
       this._livePeaks.clear();
       this._ridgeHold.clear();
       this._statusMsg(`Replaying spectrogram session (${this._specFrames.length} frames).`);
+      this._applyPanelLayout();
       this._updateAudioStatus();
       this._render();
     }
@@ -1375,6 +1373,7 @@ this._ridgeHold.set(
         selectedLevel:this.selectedLevel
       };
       this._updateSpecInfo();
+      this._applyPanelLayout();
     }
 
     _updateSpecInfo(){
@@ -2810,6 +2809,7 @@ this._ridgeHold.set(
           this._specReplayActive=false;
           this._specReplayLevel=null;
           this._statusMsg("Spectrogram replay complete.");
+          this._applyPanelLayout();
         }
         return;
       }
