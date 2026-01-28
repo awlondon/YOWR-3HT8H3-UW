@@ -1978,6 +1978,83 @@
       ctx.stroke();
       ctx.restore();
     }
+    _drawLiveSpectrogramHUD(){
+      if(!this.liveSpecEnabled || !this.emergentActive) return;
+
+      const ctx=this.ctx;
+      const rows=this.liveSpecRows;
+      const bins=this.liveSpecBins/2;
+
+      const panelW=Math.min(520,this.canvas.clientWidth*0.45);
+      const panelH=Math.min(300,this.canvas.clientHeight*0.45);
+
+      const x0=16;
+      const y0=this.canvas.clientHeight-panelH-16;
+
+      // --- background ---
+      ctx.save();
+      ctx.globalAlpha=0.96;
+      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillRect(x0-6,y0-6,panelW+12,panelH+12);
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.strokeRect(x0-6,y0-6,panelW+12,panelH+12);
+
+      // --- log-frequency mapping ---
+      const fMin=1;
+      const fMax=bins-1;
+      const logMin=Math.log(fMin);
+      const logMax=Math.log(fMax);
+
+      const binToY=(bin)=>{
+        const u=(Math.log(bin)-logMin)/(logMax-logMin);
+        return y0+panelH-u*panelH;
+      };
+
+      const colW=panelW/rows;
+
+      // --- draw waterfall (time → left) ---
+      for(let t=0;t<rows;t++){
+        const bufIdx=(this._liveSpecHead-1-t+rows)%rows;
+        const mag=this._liveSpecBuf[bufIdx];
+        if(!mag) continue;
+
+        const x=x0+panelW-t*colW;
+
+        for(let b=1;b<bins;b++){
+          const v=mag[b];
+          if(v<=0) continue;
+
+          // dB compression
+          const db=20*Math.log10(v+1e-6);
+          const norm=clamp((db+60)/60,0,1);
+
+          if(norm<=0) continue;
+
+          const y=binToY(b);
+          const yNext=binToY(b+1);
+          const h=Math.max(1,yNext-y);
+
+          const intensity=Math.floor(norm*255);
+          ctx.fillStyle=this.whiteBg
+            ? `rgb(${255-intensity},${255-intensity},${255-intensity})`
+            : `rgb(${intensity},${intensity},${intensity})`;
+
+          ctx.fillRect(x,y,colW+1,h+1);
+        }
+      }
+
+      // --- labels ---
+      ctx.globalAlpha=1;
+      ctx.fillStyle=this.whiteBg?'#000':'#fff';
+      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText(
+        `Live Spectrogram (Waterfall) | k=${this.liveSpecEntityK} | log ω`,
+        x0,
+        y0-10
+      );
+
+      ctx.restore();
+    }
     _updateEntityLabel(){
       const n=this.sides;
       const normalized=((this.activeEntityK??this.entityIndex)%n+n)%n;
@@ -2147,6 +2224,7 @@
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
       }
+      this._drawLiveSpectrogramHUD();
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
