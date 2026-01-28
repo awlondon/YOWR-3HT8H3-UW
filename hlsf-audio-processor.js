@@ -17,6 +17,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.monitorRate = 8;
     this.monitorBuffer = new Float32Array(256);
     this.monitorWrite = 0;
+    this.monitorEnabled = true;
     this.frameCount = 0;
 
     this.port.onmessage = (e) => {
@@ -46,6 +47,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
         if (Number.isFinite(msg.userVolume)) this.userVolume = Math.max(0, msg.userVolume);
         if (typeof msg.useHP === 'boolean') this.useHP = msg.useHP;
         if (msg.enabled != null) this.enabled = msg.enabled === true;
+        if (typeof msg.monitor === 'boolean') this.monitorEnabled = msg.monitor;
       }
     };
   }
@@ -85,7 +87,9 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       }
       this.monitorCounter++;
       if ((this.monitorCounter % this.monitorRate) === 0) {
-        this._emitMonitorFrame();
+        if (this.monitorEnabled) {
+          this._emitMonitorFrame();
+        }
         this.port.postMessage({
           type: 'audio-metrics',
           rms: 0,
@@ -136,7 +140,9 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       }
       this.monitorCounter++;
       if ((this.monitorCounter % this.monitorRate) === 0) {
-        this._emitMonitorFrame();
+        if (this.monitorEnabled) {
+          this._emitMonitorFrame();
+        }
         this.port.postMessage({
           type: 'audio-metrics',
           rms: 0,
@@ -169,7 +175,9 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     }
     this.monitorCounter++;
     if ((this.monitorCounter % this.monitorRate) === 0) {
-      this._emitMonitorFrame();
+      if (this.monitorEnabled) {
+        this._emitMonitorFrame();
+      }
       this.port.postMessage({
         type: 'audio-metrics',
         rms,
