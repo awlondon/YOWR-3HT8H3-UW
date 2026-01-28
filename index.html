@@ -1134,6 +1134,67 @@ this._ridgeHold.set(
         ? (ang>=aa0&&ang<aa1)
         : (ang>=aa0||ang<aa1);
     }
+    _triangleCentroid(tri){
+      return [
+        (tri[0][0]+tri[1][0]+tri[2][0])/3,
+        (tri[0][1]+tri[1][1]+tri[2][1])/3
+      ];
+    }
+    _triangleArea(tri){
+      const [ax,ay]=tri[0];
+      const [bx,by]=tri[1];
+      const [cx,cy]=tri[2];
+      return Math.abs((bx-ax)*(cy-ay)-(by-ay)*(cx-ax))/2;
+    }
+    _mapRadiusToOmega(r,{omegaMin=1,omegaMax=64,rMin=null,rMax=null}={}){
+      const bounds=this._entityRadiusBounds();
+      const minR=Number.isFinite(rMin)?rMin:bounds.rMin;
+      const maxR=Number.isFinite(rMax)?rMax:bounds.rMax;
+      if(!(maxR>minR)) return omegaMin;
+      const t=clamp((r-minR)/(maxR-minR),0,1);
+      const logMin=Math.log(Math.max(1e-6,omegaMin));
+      const logMax=Math.log(Math.max(omegaMin+1e-6,omegaMax));
+      const logOmega=logMin+t*(logMax-logMin);
+      return Math.exp(logOmega);
+    }
+    computeEntityTimeSignal(k,{sampleCount=2048,dt=null,omegaMax=64,levelWeight=null}={}){
+      const tris=this.gen.activeTriangles();
+      if(!tris||!tris.length) return null;
+
+      const pivot=this.gen.activePivot();
+      const resolvedDt=dt??(1/sampleCount);
+      const bounds=this._entityRadiusBounds();
+      const rMin=bounds.rMin;
+      const rMax=bounds.rMax;
+      const lw=levelWeight??(1/Math.max(1,this.levels));
+      const phaseOffset=this.emergentActive ? this.emergentAngle : this.globalAngle;
+
+      const inEntity=[];
+      for(const tri of tris){
+        if(this._triangleInEntity(tri,k)) inEntity.push(tri);
+      }
+      if(!inEntity.length) return new Float32Array(sampleCount);
+
+      let maxArea=0;
+      for(const tri of inEntity){
+        maxArea=Math.max(maxArea,this._triangleArea(tri));
+      }
+      if(!(maxArea>0)) maxArea=1;
+
+      const signal=new Float32Array(sampleCount);
+      for(const tri of inEntity){
+        const [cx,cy]=this._triangleCentroid(tri);
+        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+        const omega=this._mapRadiusToOmega(r,{omegaMin:1,omegaMax,rMin,rMax});
+        const amp=(this._triangleArea(tri)/maxArea)*lw;
+        const phi=phaseOffset+Math.atan2(cy-pivot[1],cx-pivot[0]);
+
+        for(let i=0;i<sampleCount;i++){
+          signal[i]+=amp*Math.sin(omega*i*resolvedDt+phi);
+        }
+      }
+      return signal;
+    }
     _computeEntitySignal(k,bins=128){
       const tris=this.gen.activeTriangles();
       if(!tris||!tris.length) return null;
@@ -2471,6 +2532,7 @@ this._ridgeHold.set(
     _exposeFingerprintApi(){
       window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
       window.compareFingerprints=(f1,f2)=>this.compareFingerprints(f1,f2);
+      window.computeEntityTimeSignal=(k,opts)=>this.computeEntityTimeSignal(k,opts);
     }
   }
 
