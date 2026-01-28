@@ -120,7 +120,8 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     }
 
     const rms = Math.sqrt(sumSq / output.length);
-    if (rms < this.gateThreshold) {
+    const threshold = this.gateThreshold ?? 0;
+    if (rms < threshold) {
       output.fill(0);
       for (let i = 0; i < output.length; i++) {
         this._pushMonitorSample(0);
@@ -155,7 +156,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
         type: 'audio-metrics',
         rms,
         gain,
-        audible: true
+        audible: rms >= threshold
       });
     }
 
