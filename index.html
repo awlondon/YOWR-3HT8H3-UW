@@ -19,8 +19,15 @@
     @supports(height:100dvh){.app{height:100dvh}}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-    .controls{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px;padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
-    .group{border:1px solid var(--border);border-radius:10px;padding:10px;background:#0f0f0f}
+    .controls{display:flex;flex-direction:column;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
+    .tab-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    .tab-btn{background:#111;border:1px solid var(--border);color:var(--muted);border-radius:999px;padding:6px 14px;cursor:pointer;font-weight:600;letter-spacing:.2px}
+    .tab-btn[aria-selected="true"]{background:var(--btn-bg);color:var(--ink);border-color:var(--accent);box-shadow:0 0 0 1px rgba(108,204,255,0.25) inset}
+    .tab-panels{display:grid}
+    .tab-panel{display:none;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px}
+    .tab-panel.active{display:grid}
+    .mode-indicator{margin-left:auto;font-size:12px;color:var(--muted);letter-spacing:.3px;text-transform:uppercase}
+    .group{border:1px solid var(--border);border-radius:12px;padding:10px;background:#0f0f0f}
     .group h3{margin:0 0 8px;font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.3px;text-transform:uppercase}
     .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
     input[type="number"],input[type="text"]{background:#111;color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:7px 9px;width:90px;text-align:center}
@@ -35,6 +42,11 @@
     .levels{display:flex;flex-wrap:wrap;gap:6px}.lvl-btn{min-width:32px;text-align:center}.lvl-btn.active{outline:2px solid var(--accent)}
     .code-label{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:13px;color:var(--accent);padding:4px 8px;background:#0f0f0f;border-radius:8px;border:1px solid var(--border);max-width:100%;overflow:hidden;text-overflow:ellipsis}
     .code-stack{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .meta-details{position:relative}
+    .meta-details summary{list-style:none;cursor:pointer;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+    .meta-details summary::-webkit-details-marker{display:none}
+    .meta-popover{position:absolute;right:0;top:calc(100% + 6px);min-width:220px;background:#0f0f0f;border:1px solid var(--border);border-radius:10px;padding:10px;z-index:2;box-shadow:0 10px 30px rgba(0,0,0,0.35)}
+    .meta-popover .code-label{display:block;margin-bottom:6px}
     .guide{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     .guide details{background:#0f0f0f;border:1px solid var(--border);border-radius:12px;padding:10px 12px}
     .guide summary{cursor:pointer;font-weight:600;color:var(--ink);letter-spacing:.2px}
@@ -44,20 +56,39 @@
     .guide li{margin:4px 0}
     .guide code{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:12px;color:var(--accent)}
     .guide .note{color:var(--muted);font-size:12px}
-    .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,38%);gap:12px;min-height:0;padding:0 12px 12px}
+    .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,40%);gap:12px;min-height:0;padding:0 12px 12px;transition:grid-template-columns .2s ease}
+    body.audio-mode .main{grid-template-columns:minmax(0,1fr) minmax(360px,46%)}
     .main.spec-hidden{grid-template-columns:minmax(0,1fr)}
-    .panel{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
-    .spectrogram{min-width:280px;max-width:60vw;resize:horizontal;overflow:auto}
-    .spec-header{padding:10px;border-bottom:1px solid var(--border);background:#0f0f0f}
+    .panel{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;border-radius:16px 0 0 16px}
+    .spectrogram{min-width:320px;max-width:65vw;resize:horizontal;overflow:auto;background:#070a12}
+    .spec-header{padding:12px;border-bottom:1px solid var(--border);background:#0b0f1a}
     .spec-controls{display:flex;flex-direction:column;gap:8px}
     .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-    .spec-body{position:relative;flex:1;min-height:0;background:#05060a}
+    .spec-body{position:relative;flex:1;min-height:0;background:radial-gradient(circle at top left, rgba(108,204,255,0.08), transparent 45%),#05060a}
     .spec-body canvas{width:100%;height:100%}
     .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border)}
+    .spec-meta{font-size:12px;color:var(--muted)}
     .spec-hidden #specPanel{display:none;}
     .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
+    .canvas-wrap::after{content:"";position:absolute;inset:0;pointer-events:none;background:
+      radial-gradient(circle at center, rgba(108,204,255,0.35) 0 1px, transparent 1px),
+      linear-gradient(to right, transparent 49.8%, rgba(108,204,255,0.12) 49.8%, rgba(108,204,255,0.12) 50.2%, transparent 50.2%),
+      linear-gradient(to bottom, transparent 49.8%, rgba(108,204,255,0.12) 49.8%, rgba(108,204,255,0.12) 50.2%, transparent 50.2%);
+      opacity:0.35}
     .help{color:var(--muted)} .status{color:var(--muted)}
     .entity-label{font-size:12px;color:var(--muted)}
+    body.focus-mode header,
+    body.focus-mode .controls,
+    body.focus-mode .guide,
+    body.focus-mode footer{opacity:0.4;transition:opacity .2s ease}
+    [data-focus-lock="true"]{transition:opacity .2s ease}
+    body.focus-mode [data-focus-lock="true"]{opacity:0.35;pointer-events:none}
+    @media (max-width:1100px){
+      .main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(260px,38vh)}
+      body.audio-mode .main{grid-template-rows:minmax(0,1fr) minmax(320px,45vh)}
+      .panel{border-left:none;border-top:1px solid var(--border);border-radius:16px 16px 0 0}
+      .spectrogram{max-width:none;min-width:0;resize:none}
+    }
   </style>
 </head>
 <body>
@@ -67,116 +98,142 @@
       <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
       <div class="code-stack">
         <div class="code-label" id="codeLabel">—</div>
-        <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+        <details class="meta-details">
+          <summary>Diagnostics</summary>
+          <div class="meta-popover">
+            <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+          </div>
+        </details>
       </div>
     </div>
   </header>
 
   <div class="controls">
-    <div class="group" style="grid-column: span 3;">
-      <h3>Dimension & Level</h3>
-      <div class="row">
-        <label for="sidesInput">n (sides):</label>
-        <input id="sidesInput" type="number" min="4" step="1" value="12" />
-        <button id="nMinus">n −1</button>
-        <button id="nPlus">n +1</button>
-        <button id="updatePlot">Update Plot</button>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <span>Level:</span>
-        <div class="levels" id="levelButtons"></div>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button id="cancelGen">Cancel Generation</button>
-      </div>
+    <div class="tab-bar">
+      <button class="tab-btn" data-tab="geometry" aria-selected="true">Geometry</button>
+      <button class="tab-btn" data-tab="motion" aria-selected="false">Motion</button>
+      <button class="tab-btn" data-tab="audio" aria-selected="false">Audio</button>
+      <button class="tab-btn" data-tab="view" aria-selected="false">View</button>
+      <div class="mode-indicator" id="modeIndicator">Mode: Explore</div>
     </div>
+    <div class="tab-panels">
+      <div class="tab-panel active" id="tab-geometry" data-tab-panel="geometry">
+        <div class="group" style="grid-column: span 6;" data-focus-lock="true">
+          <h3>Dimension & Level</h3>
+          <div class="row">
+            <label for="sidesInput">n (sides):</label>
+            <input id="sidesInput" type="number" min="4" step="1" value="12" />
+            <button id="nMinus">n −1</button>
+            <button id="nPlus">n +1</button>
+            <button id="updatePlot">Update Plot</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <span>Level:</span>
+            <div class="levels" id="levelButtons"></div>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <button id="cancelGen">Cancel Generation</button>
+          </div>
+        </div>
+        <div class="group" style="grid-column: span 6;" data-focus-lock="true">
+          <h3>Appearance</h3>
+          <div class="row">
+            <label for="alphaInput">Alpha (α):</label>
+            <input id="alphaInput" type="number" min="0" max="1" step="0.0001" value="0.02" />
+            <button id="applyAlpha">Apply α</button>
+            <button id="autoAlpha">Auto α</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <span>Overlayed α:</span>
+            <span id="overlayAlpha">—</span>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <button id="toggleEdges" class="btn-neutral">Show Colors</button>
+            <button id="colorMode" class="btn-neutral">Color Mode</button>
+            <button id="toggleBg" class="btn-neutral" aria-pressed="true">BG: White</button>
+          </div>
+        </div>
+      </div>
 
-    <div class="group" style="grid-column: span 3;">
-      <h3>Appearance</h3>
-      <div class="row">
-        <label for="alphaInput">Alpha (α):</label>
-        <input id="alphaInput" type="number" min="0" max="1" step="0.0001" value="0.02" />
-        <button id="applyAlpha">Apply α</button>
-        <button id="autoAlpha">Auto α</button>
+      <div class="tab-panel" id="tab-motion" data-tab-panel="motion">
+        <div class="group" style="grid-column: span 12;" data-focus-lock="true">
+          <h3>Rotation</h3>
+          <div class="row" style="margin-bottom:8px;">
+            <label for="speedInput">Speed:</label>
+            <input id="speedInput" type="number" min="0.001" max="10" step="0.001" value="0.50" />
+          </div>
+          <div class="row">
+            <button id="speedPlus">Speed +</button>
+            <button id="speedMinus">Speed −</button>
+            <button id="toggleRotation" class="btn-primary">Start Rotation</button>
+            <button id="toggleEmergent" class="btn-success">Emergent Rotation</button>
+            <button id="pauseEmergent" class="btn-warning" disabled>Pause Emergent</button>
+            <button id="stepBack" class="btn-neutral" title="Step Back (,) " disabled>Step ◀</button>
+            <button id="stepForward" class="btn-neutral" title="Step Forward (.)" disabled>Step ▶</button>
+            <button id="toggleSnap" class="btn-neutral" aria-pressed="false">
+              Snap: OFF
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="row" style="margin-top:8px;">
-        <span>Overlayed α:</span>
-        <span id="overlayAlpha">—</span>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button id="toggleEdges" class="btn-neutral">Show Colors</button>
-        <button id="colorMode" class="btn-neutral">Color Mode</button>
-        <button id="toggleBg" class="btn-neutral" aria-pressed="true">BG: White</button>
-      </div>
-    </div>
 
-    <div class="group" style="grid-column: span 3;">
-      <h3>Rotation</h3>
-      <!-- NEW: rotation speed field -->
-      <div class="row" style="margin-bottom:8px;">
-        <label for="speedInput">Speed:</label>
-        <input id="speedInput" type="number" min="0.001" max="10" step="0.001" value="0.50" />
+      <div class="tab-panel" id="tab-audio" data-tab-panel="audio">
+        <div class="group" style="grid-column: span 6;" data-focus-lock="true">
+          <h3>Audio Focus</h3>
+          <div class="row">
+            <button id="toggleAudio" class="btn-success" aria-pressed="false">Audio: Off</button>
+            <button id="toggleLiveFft" class="btn-neutral" aria-pressed="false">Live FFT: Off</button>
+            <button id="cycleLiveEntity" class="btn-neutral">Live Entity +</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <span class="status" id="audioStatus">Audio muted</span>
+          </div>
+        </div>
+        <div class="group" style="grid-column: span 6;" data-focus-lock="true">
+          <h3>Audio Guidance</h3>
+          <div class="row">
+            <span class="status">Enable audio to expand the spectrogram and surface FFT controls.</span>
+          </div>
+        </div>
       </div>
-      <div class="row">
-        <button id="speedPlus">Speed +</button>
-        <button id="speedMinus">Speed −</button>
-        <button id="toggleRotation" class="btn-primary">Start Rotation</button>
-        <button id="toggleEmergent" class="btn-success">Emergent Rotation</button>
-        <button id="pauseEmergent" class="btn-warning" disabled>Pause Emergent</button>
-        <button id="stepBack" class="btn-neutral" title="Step Back (,) " disabled>Step ◀</button>
-        <button id="stepForward" class="btn-neutral" title="Step Forward (.)" disabled>Step ▶</button>
-        <button id="toggleSnap" class="btn-neutral" aria-pressed="false">
-          Snap: OFF
-        </button>
-      </div>
-    </div>
 
-    <div class="group" style="grid-column: span 3;">
-      <h3>View</h3>
-      <div class="row">
-        <button id="zoomIn">Zoom In</button>
-        <button id="zoomOut">Zoom Out</button>
-        <button id="resetView">Reset View</button>
-        <button id="viewPortal">View Portal</button>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button id="panLeft">◀️</button>
-        <button id="panRight">▶️</button>
-        <button id="panUp">▲</button>
-        <button id="panDown">▼</button>
-        <button id="downloadPng" type="button" style="margin-left:auto;"></button>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button id="entityPrev">Entity ◀</button>
-        <button id="entityNext">Entity ▶</button>
-        <button id="entityAuto" class="btn-neutral" aria-pressed="false">Auto-Advance</button>
-        <button id="entityLock" class="btn-neutral" aria-pressed="false">Lock Rotation</button>
-        <span class="entity-label" id="entityLabel">Entity —</span>
+      <div class="tab-panel" id="tab-view" data-tab-panel="view">
+        <div class="group" style="grid-column: span 6;" data-focus-lock="true">
+          <h3>Navigate</h3>
+          <div class="row">
+            <button id="zoomIn">Zoom In</button>
+            <button id="zoomOut">Zoom Out</button>
+            <button id="resetView">Reset View</button>
+            <button id="viewPortal">View Portal</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <button id="panLeft">◀️</button>
+            <button id="panRight">▶️</button>
+            <button id="panUp">▲</button>
+            <button id="panDown">▼</button>
+            <button id="downloadPng" type="button" style="margin-left:auto;"></button>
+          </div>
+        </div>
+        <div class="group" style="grid-column: span 6;">
+          <h3>Entity Focus</h3>
+          <div class="row">
+            <button id="entityPrev">Entity ◀</button>
+            <button id="entityNext">Entity ▶</button>
+            <button id="entityAuto" class="btn-neutral" aria-pressed="false">Auto-Advance</button>
+            <button id="entityLock" class="btn-neutral" aria-pressed="false">Lock Rotation</button>
+            <button id="exitFocus" class="btn-neutral">Exit Focus</button>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <span class="entity-label" id="entityLabel">Entity —</span>
+          </div>
+        </div>
       </div>
     </div>
-
-    <div class="group" style="grid-column: span 3;">
-      <h3>Spectrogram Sessions</h3>
-      <div class="row">
-        <button id="exportSpec" class="btn-neutral">Export Session</button>
-        <button id="importSpec" class="btn-neutral">Import Session</button>
-        <button id="replaySpec" class="btn-warning">Replay Session</button>
-        <button id="toggleSpecPanel" class="btn-neutral">Hide Panel</button>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <span class="status" id="specInfo">No session loaded</span>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <label for="sliceBinInput">ω bin:</label>
-        <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
-        <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
-      </div>
-      <input id="specFileInput" type="file" accept="application/json" style="display:none" />
-    </div>
+    <input id="specFileInput" type="file" accept="application/json" style="display:none" />
   </div>
 
   <section class="guide" aria-label="Ridge tuning guide">
-    <details open>
+    <details>
       <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
       <h4>1) Ridge selectivity (Top-K)</h4>
       <ul>
@@ -225,6 +282,8 @@ this._ridgeHold.set(
         <div class="spec-controls">
           <div class="spec-row">
             <strong>Spectrogram</strong>
+            <span class="spec-meta" id="specInfo">No session loaded</span>
+            <button id="toggleSpecPanel" class="btn-neutral" style="margin-left:auto;">Hide Panel</button>
           </div>
           <div class="spec-row">
             <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
@@ -237,6 +296,16 @@ this._ridgeHold.set(
             <button id="specZoomLevelIn">Zoom L +</button>
             <button id="specZoomLevelOut">Zoom L −</button>
             <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
+          </div>
+          <div class="spec-row">
+            <button id="exportSpec" class="btn-neutral">Export Session</button>
+            <button id="importSpec" class="btn-neutral">Import Session</button>
+            <button id="replaySpec" class="btn-warning">Replay Session</button>
+          </div>
+          <div class="spec-row">
+            <label for="sliceBinInput">ω bin:</label>
+            <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
+            <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
           </div>
         </div>
       </div>
@@ -423,11 +492,19 @@ this._ridgeHold.set(
       this.panLeftBtn=document.getElementById('panLeft'); this.panRightBtn=document.getElementById('panRight'); this.panUpBtn=document.getElementById('panUp'); this.panDownBtn=document.getElementById('panDown');
       this.entityPrevBtn=document.getElementById('entityPrev'); this.entityNextBtn=document.getElementById('entityNext');
       this.entityAutoBtn=document.getElementById('entityAuto'); this.entityLockBtn=document.getElementById('entityLock'); this.entityLabel=document.getElementById('entityLabel');
+      this.exitFocusBtn=document.getElementById('exitFocus');
+      this.toggleAudioBtn=document.getElementById('toggleAudio');
+      this.toggleLiveFftBtn=document.getElementById('toggleLiveFft');
+      this.cycleLiveEntityBtn=document.getElementById('cycleLiveEntity');
+      this.audioStatusEl=document.getElementById('audioStatus');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
       this.sliceBinInput=document.getElementById('sliceBinInput'); this.toggleCubeSliceBtn=document.getElementById('toggleCubeSlice');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
+      this.modeIndicator=document.getElementById('modeIndicator');
+      this.tabButtons=Array.from(document.querySelectorAll('[data-tab]'));
+      this.tabPanels=Array.from(document.querySelectorAll('[data-tab-panel]'));
       this.mainPanel=document.getElementById('mainPanel');
       this.specPanel=document.getElementById('specPanel');
       this.specCanvas=document.getElementById('specCanvas');
@@ -449,6 +526,7 @@ this._ridgeHold.set(
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.activeEntityK=0;
       this.entityFocusActive=false;
+      this.focusModeActive=false;
       this.entityRevealActive=false;
       this.entityRevealRequest=null;
       this.entityRevealDurationMs=3800;
@@ -507,7 +585,7 @@ this._ridgeHold.set(
       this._hudWarning=null;
       this.canvasFocused=false;
       // --- Audio (view-dependent synthesis) ---
-      this.audioEnabled=true;          // default ON (mute only if user toggles later)
+      this.audioEnabled=false;         // start muted for visual focus
       this.audioCtx=null;
       this.audioNode=null;             // ScriptProcessor fallback
       this.audioWorkletNode=null;      // preferred
@@ -528,10 +606,11 @@ this._ridgeHold.set(
         this.specCanvas.height=512;
       }
 
-      this._buildLevelButtons(); this._bindEvents(); this._resizeCanvas();
+      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._resizeCanvas();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
+      this._syncAudioUi();
       this._loop();
     }
 
@@ -565,9 +644,87 @@ this._ridgeHold.set(
 
     _buildLevelButtons(){ this.levelButtons.innerHTML=''; for(let L=0;L<=10;L++){const b=document.createElement('button'); b.className='lvl-btn'; b.textContent=String(L); if(L===this.levels)b.classList.add('active'); b.addEventListener('click',()=>this.setLevel(L)); this.levelButtons.appendChild(b)}}
     _markActiveLevel(){[...this.levelButtons.children].forEach((el,i)=>el.classList.toggle('active',i===this.levels))}
+    _initTabs(){
+      if(!this.tabButtons.length) return;
+      this.tabButtons.forEach(btn=>{
+        btn.addEventListener('click',()=>this._setActiveTab(btn.dataset.tab));
+      });
+      this._setActiveTab('geometry');
+    }
+    _setActiveTab(tabName){
+      this.tabButtons.forEach(btn=>{
+        const active=btn.dataset.tab===tabName;
+        btn.setAttribute('aria-selected',String(active));
+      });
+      this.tabPanels.forEach(panel=>{
+        panel.classList.toggle('active',panel.dataset.tabPanel===tabName);
+      });
+    }
+    _setFocusMode(active){
+      this.focusModeActive=active;
+      document.body.classList.toggle('focus-mode',active);
+    }
+    _setAudioMode(active){
+      document.body.classList.toggle('audio-mode',active);
+    }
+    _updateModeIndicator(){
+      if(!this.modeIndicator) return;
+      let mode='Explore';
+      if(this.emergentActive) mode='Emergent';
+      else if(this.rotationActive) mode='Motion';
+      else if(this.entityFocusActive) mode='Entity';
+      else if(this.focusModeActive) mode='Portal';
+      if(this.audioEnabled) mode=`${mode} + Audio`;
+      this.modeIndicator.textContent=`Mode: ${mode}`;
+    }
+    _syncAudioUi(){
+      if(this.toggleAudioBtn){
+        this.toggleAudioBtn.setAttribute('aria-pressed',String(this.audioEnabled));
+        this.toggleAudioBtn.textContent=this.audioEnabled?"Audio: On":"Audio: Off";
+      }
+      if(this.toggleLiveFftBtn){
+        this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.liveSpecEnabled));
+        this.toggleLiveFftBtn.textContent=this.liveSpecEnabled?"Live FFT: On":"Live FFT: Off";
+      }
+      if(this.audioStatusEl){
+        this.audioStatusEl.textContent=this.audioEnabled?"Audio enabled":"Audio muted";
+      }
+      this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
+      this._updateModeIndicator();
+    }
+    _toggleAudio(){
+      this.audioEnabled=!this.audioEnabled;
+      const label=this.audioEnabled?"Audio enabled":"Audio muted";
+      this._statusMsg(label);
+      if(this.audioEnabled){
+        this._ensureAudio();
+      } else if(this.audioCtx){
+        this._audioParamsPending={w:[],a:[],p:[]};
+        this._pushAudioParamsNow();
+      }
+      this._syncAudioUi();
+    }
+    _toggleLiveFft(){
+      this.liveSpecEnabled=!this.liveSpecEnabled;
+      this._statusMsg(this.liveSpecEnabled?"Live FFT: ON (Emergent)":"Live FFT: OFF");
+      if(this.liveSpecEnabled){
+        if(this.emergentActive) this._startSpectrogramRecording();
+      } else {
+        this._specRecording=false;
+        this._specReplayActive=false;
+        this._updateSpecInfo();
+      }
+      this._render();
+      this._syncAudioUi();
+    }
+    _cycleLiveEntity(){
+      this.liveSpecEntityK=(this.liveSpecEntityK+1)%this.sides;
+      this._statusMsg(`Live FFT entity k = ${this.liveSpecEntityK}`);
+      this._render();
+    }
 
     _bindEvents(){
-      const armAudio=()=>{this._ensureAudio();};
+      const armAudio=()=>{if(this.audioEnabled) this._ensureAudio();};
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
       window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
@@ -580,6 +737,15 @@ this._ridgeHold.set(
       this.toggleEdgesBtn.addEventListener('click',()=>this._toggleEdges());
       this.colorModeBtn.addEventListener('click',()=>this._toggleColorMode());
       this.toggleBgBtn.addEventListener('click',()=>this._toggleBg());
+      if(this.toggleAudioBtn){
+        this.toggleAudioBtn.addEventListener('click',()=>this._toggleAudio());
+      }
+      if(this.toggleLiveFftBtn){
+        this.toggleLiveFftBtn.addEventListener('click',()=>this._toggleLiveFft());
+      }
+      if(this.cycleLiveEntityBtn){
+        this.cycleLiveEntityBtn.addEventListener('click',()=>this._cycleLiveEntity());
+      }
 
       // Rotation speed controls + sync
       this.speedPlus.addEventListener('click',()=>{this.rotationSpeed=Math.min(10,this.rotationSpeed+0.1);this._syncSpeedField();this._updateStatus()});
@@ -608,6 +774,9 @@ this._ridgeHold.set(
       this.entityNextBtn.addEventListener('click',()=>this._advanceEntity(1));
       this.entityAutoBtn.addEventListener('click',()=>this._toggleEntityAuto());
       this.entityLockBtn.addEventListener('click',()=>this._toggleEntityLock());
+      if(this.exitFocusBtn){
+        this.exitFocusBtn.addEventListener('click',()=>this._resetView());
+      }
       this.exportSpecBtn.addEventListener('click',()=>this.exportSpectrogramSession());
       this.importSpecBtn.addEventListener('click',()=>this._triggerSpecImport());
       this.replaySpecBtn.addEventListener('click',()=>this.replaySpectrogramSession());
@@ -669,34 +838,15 @@ this._ridgeHold.set(
           if(e.key==='['){this.focusEntity(--this.entityIndex); e.preventDefault(); return;}
           if(e.key===']'){this.focusEntity(++this.entityIndex); e.preventDefault(); return;}
           if(e.key.toLowerCase()==='f'){
-            this.liveSpecEnabled=!this.liveSpecEnabled;
-            this._statusMsg(this.liveSpecEnabled?"Live FFT: ON (Emergent)":"Live FFT: OFF");
-            if(this.liveSpecEnabled){
-              if(this.emergentActive) this._startSpectrogramRecording();
-            } else {
-              this._specRecording=false;
-              this._specReplayActive=false;
-              this._updateSpecInfo();
-            }
-            this._render();
+            this._toggleLiveFft();
             return;
           }
           if(e.key.toLowerCase()==='m'){
-            this.audioEnabled=!this.audioEnabled;
-            const label=this.audioEnabled?"Audio enabled":"Audio muted";
-            this._statusMsg(label);
-            if(this.audioEnabled){
-              this._ensureAudio();
-            } else if(this.audioCtx){
-              this._audioParamsPending={w:[],a:[],p:[]};
-              this._pushAudioParamsNow();
-            }
+            this._toggleAudio();
             return;
           }
           if(e.key.toLowerCase()==='g'){
-            this.liveSpecEntityK=(this.liveSpecEntityK+1)%this.sides;
-            this._statusMsg(`Live FFT entity k = ${this.liveSpecEntityK}`);
-            this._render();
+            this._cycleLiveEntity();
             return;
           }
           if(e.key.toLowerCase()==='e'){
@@ -747,6 +897,7 @@ this._ridgeHold.set(
     _toggleRotation(){
       if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
       if(this.rotationActive){this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"} else {this.rotationActive=true; this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"; this.toggleRotationBtn.textContent="Stop Rotation"}
+      this._updateModeIndicator();
     }
     _toggleEmergent(){
       if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
@@ -762,20 +913,21 @@ this._ridgeHold.set(
       }
       this._updateButtonsEnabled(); this._updateHeaderLabels(); this._updateStatus(); this._render();
       this._updateSnapLabel();
+      this._updateModeIndicator();
     }
     _togglePauseEmergent(){if(!this.emergentActive)return; this.emergentPaused=!this.emergentPaused; this.pauseEmergentBtn.textContent=this.emergentPaused?"Resume Emergent":"Pause Emergent"; this.stepBackBtn.disabled=!this.emergentPaused; this.stepForwardBtn.disabled=!this.emergentPaused}
     _applyBg(){this.wrap.style.background=this.whiteBg?'#fff':'#000'; this.toggleBgBtn.setAttribute('aria-pressed',String(this.whiteBg)); this.toggleBgBtn.textContent=this.whiteBg?"BG: White":"BG: Black"}
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
     _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this.entityFocusActive=false; this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render()}
+    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._updateModeIndicator()}
     _viewPortal(){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
       this._stopEntityRevealTour();
       const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
       let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
       if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
-      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._render();
+      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true); this._render(); this._updateModeIndicator();
     }
     _downloadPng(){
       try{
@@ -2563,6 +2715,7 @@ this._ridgeHold.set(
         this.pauseEmergentBtn.disabled=true;
         this.pauseEmergentBtn.textContent="Pause Emergent";
         this._updateButtonsEnabled();
+        this._updateModeIndicator();
       }
     }
     focusEntity(k,{animate=true}={}){
@@ -2582,9 +2735,11 @@ this._ridgeHold.set(
       this.activeEntityK=kk;
       this.liveSpecEntityK=kk;
       this.entityFocusActive=true;
+      this._setFocusMode(true);
       if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
       this._stopEntityRevealTour();
+      this._updateModeIndicator();
 
       if(!animate){
         this._zoomToRect(targetRect);
