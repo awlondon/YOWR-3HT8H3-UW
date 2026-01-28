@@ -506,13 +506,19 @@ this._ridgeHold.set(
       this._entityFFT=null;
       this._hudWarning=null;
       this.canvasFocused=false;
-      this.audioContext=null;
-      this.audioNode=null;
-      this.audioGainNode=null;
-      this.audioGain=0.08;
-      this.audioTime=0;
-      this.audioUserDisabled=false;
-      this._audioParams={omega:[],phi:[],amp:[]};
+      // --- Audio (view-dependent synthesis) ---
+      this.audioEnabled=true;          // default ON (mute only if user toggles later)
+      this.audioCtx=null;
+      this.audioNode=null;             // ScriptProcessor fallback
+      this.audioWorkletNode=null;      // preferred
+      this._audioPhaseT=0;             // seconds
+      this._audioParams={w:[],a:[],p:[]};   // angular freq, amplitude, phase
+      this._audioParamsPending=null;   // latest pushed set from render loop
+      this._audioGain=0.12;            // master gain (tune)
+      this._audioSmooth=0.15;          // param smoothing (0..1)
+      this._audioLastParamPush=0;
+      this._audioParamPushEveryMs=50;  // update ~20 Hz
+      this._audioMaxOsc=256;           // cap oscillators to stay stable
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -561,6 +567,9 @@ this._ridgeHold.set(
     _markActiveLevel(){[...this.levelButtons.children].forEach((el,i)=>el.classList.toggle('active',i===this.levels))}
 
     _bindEvents(){
+      const armAudio=()=>{this._ensureAudio();};
+      window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
+      window.addEventListener('keydown',armAudio,{once:true,passive:true});
       window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
       this.nMinus.addEventListener('click',()=>this._bumpSides(-1));
       this.nPlus.addEventListener('click',()=>this._bumpSides(+1));
@@ -628,7 +637,6 @@ this._ridgeHold.set(
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
       this.canvas.addEventListener('mousedown',e=>{
         this.canvas.focus({preventScroll:true});
-        this._requestAudioStart();
         this.dragging=true;
         this.dragMoved=false;
         this.dragStart=[e.clientX,e.clientY];
@@ -642,15 +650,12 @@ this._ridgeHold.set(
       window.addEventListener('mouseup',()=>{this.dragging=false});
       this.canvas.addEventListener('focus',()=>{
         this.canvasFocused=true;
-        this._requestAudioStart();
       });
       this.canvas.addEventListener('blur',()=>{
         this.canvasFocused=false;
-        this._refreshAudioOutput();
       });
       window.addEventListener('blur',()=>{
         this.canvasFocused=false;
-        this._refreshAudioOutput();
       });
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
       if(this.specCanvas){
@@ -661,7 +666,6 @@ this._ridgeHold.set(
       window.addEventListener('keydown',e=>{
         const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
         if(!typing){
-          this._requestAudioStart();
           if(e.key==='['){this.focusEntity(--this.entityIndex); e.preventDefault(); return;}
           if(e.key===']'){this.focusEntity(++this.entityIndex); e.preventDefault(); return;}
           if(e.key.toLowerCase()==='f'){
@@ -678,10 +682,15 @@ this._ridgeHold.set(
             return;
           }
           if(e.key.toLowerCase()==='m'){
-            this.audioUserDisabled=!this.audioUserDisabled;
-            const label=this.audioUserDisabled?"Audio muted":"Audio enabled";
+            this.audioEnabled=!this.audioEnabled;
+            const label=this.audioEnabled?"Audio enabled":"Audio muted";
             this._statusMsg(label);
-            this._refreshAudioOutput();
+            if(this.audioEnabled){
+              this._ensureAudio();
+            } else if(this.audioCtx){
+              this._audioParamsPending={w:[],a:[],p:[]};
+              this._pushAudioParamsNow();
+            }
             return;
           }
           if(e.key.toLowerCase()==='g'){
@@ -939,82 +948,207 @@ this._ridgeHold.set(
       this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
     }
 
-    _requestAudioStart(){
-      this._ensureAudioContext();
-      if(!this.audioContext) return;
-      if(this.audioContext.state==="suspended"){
-        this.audioContext.resume().catch(()=>{});
+    async _ensureAudio(){
+      if(!this.audioEnabled) return;
+      if(this.audioCtx) {
+        if(this.audioCtx.state==="suspended") await this.audioCtx.resume();
+        return;
       }
-      this._refreshAudioOutput();
-    }
 
-    _ensureAudioContext(){
-      if(this.audioContext) return;
-      const AudioCtx=window.AudioContext||window.webkitAudioContext;
-      if(!AudioCtx) return;
-      this.audioContext=new AudioCtx();
-      this.audioGainNode=this.audioContext.createGain();
-      this.audioGainNode.gain.value=0;
-      const processor=this.audioContext.createScriptProcessor(1024,0,1);
-      processor.onaudioprocess=(e)=>{
-        const output=e.outputBuffer.getChannelData(0);
-        const params=this._audioParams;
-        const sampleRate=this.audioContext.sampleRate||44100;
-        const gain=this._shouldAudioPlay()?this.audioGain:0;
-        if(!params||!params.omega.length||gain===0){
-          output.fill(0);
-          this.audioTime+=output.length/sampleRate;
-          return;
-        }
-        const {omega,phi,amp}=params;
-        let t=this.audioTime;
-        const dt=1/sampleRate;
-        for(let i=0;i<output.length;i++){
-          let sum=0;
-          for(let j=0;j<omega.length;j++){
-            sum+=amp[j]*Math.sin(omega[j]*t+phi[j]);
+      const Ctx=window.AudioContext||window.webkitAudioContext;
+      if(!Ctx){ this._statusMsg("WebAudio not supported."); return; }
+
+      this.audioCtx=new Ctx({latencyHint:"interactive"});
+
+      // Preferred: AudioWorklet
+      if(this.audioCtx.audioWorklet){
+        const workletSrc=`
+          class HLSFProc extends AudioWorkletProcessor {
+            constructor(){
+              super();
+              this.w=new Float32Array(0);
+              this.a=new Float32Array(0);
+              this.p=new Float32Array(0);
+              this.wT=new Float32Array(0);
+              this.aT=new Float32Array(0);
+              this.pT=new Float32Array(0);
+              this.smooth=0.15;
+              this.gain=0.12;
+              this.t=0;
+              this.port.onmessage=(e)=>{
+                const d=e.data||{};
+                if(d.type==="params"){
+                  this.smooth=(typeof d.smooth==="number") ? d.smooth : this.smooth;
+                  this.gain=(typeof d.gain==="number") ? d.gain : this.gain;
+
+                  // Targets
+                  this.wT=new Float32Array(d.w||[]);
+                  this.aT=new Float32Array(d.a||[]);
+                  this.pT=new Float32Array(d.p||[]);
+
+                  // Current arrays sized to target
+                  if(this.w.length!==this.wT.length){
+                    this.w=new Float32Array(this.wT.length);
+                    this.a=new Float32Array(this.aT.length);
+                    this.p=new Float32Array(this.pT.length);
+                    this.w.set(this.wT);
+                    this.a.set(this.aT);
+                    this.p.set(this.pT);
+                  }
+                }
+              };
+            }
+            process(inputs,outputs,params){
+              const out=outputs[0];
+              const ch0=out[0];
+              const sr=sampleRate;
+              const N=ch0.length;
+              const nOsc=this.w.length;
+
+              for(let i=0;i<N;i++){
+                // smooth params toward targets
+                const s=this.smooth;
+                let y=0;
+                for(let k=0;k<nOsc;k++){
+                  const w=this.w[k]+=(this.wT[k]-this.w[k])*s;
+                  const a=this.a[k]+=(this.aT[k]-this.a[k])*s;
+                  const p=this.p[k]+=(this.pT[k]-this.p[k])*s;
+                  y+=a*Math.sin(w*this.t+p);
+                }
+                // soft clip
+                y=Math.tanh(y)*this.gain;
+                ch0[i]=y;
+                this.t+=1/sr;
+              }
+              if(out[1]) out[1].set(ch0);
+              return true;
+            }
           }
-          output[i]=sum*gain;
-          t+=dt;
-        }
-        this.audioTime=t;
-      };
-      processor.connect(this.audioGainNode);
-      this.audioGainNode.connect(this.audioContext.destination);
-      this.audioNode=processor;
-    }
+          registerProcessor("hlsf-proc",HLSFProc);
+        `;
+        const blob=new Blob([workletSrc],{type:"application/javascript"});
+        const url=URL.createObjectURL(blob);
+        await this.audioCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
 
-    _shouldAudioPlay(){
-      return this.canvasFocused&&!this.audioUserDisabled;
-    }
+        this.audioWorkletNode=new AudioWorkletNode(this.audioCtx,"hlsf-proc",{
+          numberOfInputs:0,
+          numberOfOutputs:1,
+          outputChannelCount:[2],
+        });
+        this.audioWorkletNode.connect(this.audioCtx.destination);
 
-    _refreshAudioOutput(){
-      if(!this.audioGainNode) return;
-      this.audioGainNode.gain.value=this._shouldAudioPlay()?this.audioGain:0;
-    }
-
-    _updateAudioParams(){
-      const tris=this.getVisibleTriangles();
-      const view=this._worldViewRect();
-      const pivot=this.gen.activePivot();
-      const bounds=this._entityRadiusBounds();
-      const lw=1/Math.max(1,this.levels);
-      const phaseOffset=this.emergentActive ? this.emergentAngle : this.globalAngle;
-      const omega=[];
-      const phi=[];
-      const amp=[];
-      for(const tri of tris){
-        const area=this._triangleArea(tri);
-        if(!(area>0)) continue;
-        const visibility=triangleVisibleFraction(tri,view);
-        if(!(visibility>0)) continue;
-        const [cx,cy]=this._triangleCentroid(tri);
-        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
-        omega.push(this._mapRadiusToOmega(r,{omegaMin:1,omegaMax:64,rMin:bounds.rMin,rMax:bounds.rMax}));
-        phi.push(phaseOffset+Math.atan2(cy-pivot[1],cx-pivot[0]));
-        amp.push(area*lw*visibility);
+        // push an initial (silent) param set
+        this._pushAudioParamsNow();
+        this._statusMsg("Audio armed (worklet).");
+        return;
       }
-      this._audioParams={omega,phi,amp};
+
+      // Fallback: ScriptProcessor (works, but older)
+      const bufSize=1024;
+      this.audioNode=this.audioCtx.createScriptProcessor(bufSize,0,1);
+      this.audioNode.onaudioprocess=(e)=>{
+        const out=e.outputBuffer.getChannelData(0);
+        const sr=this.audioCtx.sampleRate;
+        const N=out.length;
+
+        // pull latest pending params
+        if(this._audioParamsPending){
+          const d=this._audioParamsPending;
+          this._audioParamsPending=null;
+          this._audioParams=d;
+        }
+
+        const w=this._audioParams.w, a=this._audioParams.a, p=this._audioParams.p;
+        const nOsc=w.length;
+        let t=this._audioPhaseT;
+
+        for(let i=0;i<N;i++){
+          let y=0;
+          for(let k=0;k<nOsc;k++){
+            y+=a[k]*Math.sin(w[k]*t+p[k]);
+          }
+          out[i]=Math.tanh(y)*this._audioGain;
+          t+=1/sr;
+        }
+        this._audioPhaseT=t;
+      };
+      this.audioNode.connect(this.audioCtx.destination);
+      this._statusMsg("Audio armed (scriptprocessor).");
+    }
+
+    _pushAudioParamsNow(){
+      const d=this._audioParamsPending||this._audioParams;
+      if(this.audioWorkletNode){
+        this.audioWorkletNode.port.postMessage({
+          type:"params",
+          w:d.w, a:d.a, p:d.p,
+          gain:this._audioGain,
+          smooth:this._audioSmooth
+        });
+      }
+    }
+
+    // Map triangles -> oscillator params derived from current view
+    _updateAudioFromTriangles(tris){
+      if(!this.audioEnabled) return;
+      if(!this.audioCtx) return;
+
+      const pivot=this.gen.activePivot();
+      const [xmin,ymin,xmax,ymax]=this._worldViewRect();
+      const corners=[[xmin,ymin],[xmin,ymax],[xmax,ymin],[xmax,ymax]];
+      let rMin=Infinity, rMax=0;
+      for(const c of corners){
+        const r=Math.hypot(c[0]-pivot[0],c[1]-pivot[1]);
+        if(r<rMin) rMin=r;
+        if(r>rMax) rMax=r;
+      }
+      if(!(rMax>rMin)){ rMin=0; rMax=1; }
+
+      // frequency range (tune)
+      const fLo=80, fHi=1200;
+      const log=(x)=>Math.log(x);
+      const r0=Math.max(1e-6,rMin);
+      const r1=Math.max(r0*1.001,rMax);
+      const lr0=log(r0), lr1=log(r1);
+
+      // Downsample triangles -> oscillators (cap)
+      const stride=Math.max(1,Math.floor(tris.length/this._audioMaxOsc));
+      const w=[], a=[], p=[];
+
+      for(let i=0;i<tris.length;i+=stride){
+        const tri=tris[i];
+        const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+        const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+
+        const r=Math.max(1e-6,Math.hypot(cx-pivot[0],cy-pivot[1]));
+        const u=(log(r)-lr0)/(lr1-lr0);
+        const f=fLo*Math.pow(fHi/fLo,clamp(u,0,1));
+        const omega=TAU*f;
+
+        // amplitude: small but increases with “visibility density”
+        const amp=1.0; // keep flat first; later: area*visibility weighting
+        const ph=Math.atan2(cy-pivot[1],cx-pivot[0]); // spatial phase
+
+        w.push(omega);
+        a.push(amp);
+        p.push(ph);
+        if(w.length>=this._audioMaxOsc) break;
+      }
+
+      // Normalize amplitude so sum doesn’t explode
+      const n=w.length||1;
+      const norm=1/Math.sqrt(n);
+      for(let i=0;i<a.length;i++) a[i]*=norm;
+
+      const payload={w,a,p};
+      this._audioParamsPending=payload;
+
+      const now=performance.now();
+      if(now-this._audioLastParamPush>this._audioParamPushEveryMs){
+        this._audioLastParamPush=now;
+        this._pushAudioParamsNow();
+      }
     }
 
     analysisTick(dtSec){
@@ -1022,8 +1156,6 @@ this._ridgeHold.set(
       this._updateEntitySignal();
       this._updateFFT();
       this._updateOmegaLevelCache();
-      this._updateAudioParams();
-      this._refreshAudioOutput();
     }
 
     _ensureDemoMode(){
@@ -2519,24 +2651,26 @@ this._ridgeHold.set(
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
         this._updateLiveSpectrogram(allTris,dtSec);
+        this._updateAudioFromTriangles(allTris);
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
           this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angle=this._snapAngle(this.globalAngle);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
+          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); this._updateAudioFromTriangles(seed); drew=true; }
         } else {
           this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angle=this._snapAngle(this.globalAngle);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          this._updateAudioFromTriangles(allTris);
           drew=true;
         }
       } else {
         const base=this.gen.activeTriangles();
-        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
-        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
+        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); this._updateAudioFromTriangles(base); drew=true}
+        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); this._updateAudioFromTriangles(seed); drew=true}}
       }
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
