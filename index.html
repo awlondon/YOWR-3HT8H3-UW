@@ -2891,15 +2891,12 @@ this._ridgeHold.set(
   class AudioEngine {
     constructor(){
       this.ctx=null;
-      this.master=null;
-      this.noise=null;
-      this.filters=[];
-      this.gains=[];
+      this.node=null;
+      this.ready=false;
       this.enabled=false;
 
-      this.bands=32;
-      this.fMin=80;
-      this.fMax=6000;
+      this.minFreq=40;
+      this.freqStep=12;
 
       this.lastMag=null;
     }
@@ -2910,90 +2907,62 @@ this._ridgeHold.set(
       if(!Ctx) return;
       const ctx=new Ctx();
       this.ctx=ctx;
-
-      const master=ctx.createGain();
-      master.gain.value=0.0;
-      master.connect(ctx.destination);
-      this.master=master;
-
-      const bufSize=2*ctx.sampleRate;
-      const buf=ctx.createBuffer(1,bufSize,ctx.sampleRate);
-      const data=buf.getChannelData(0);
-      for(let i=0;i<bufSize;i++) data[i]=(Math.random()*2-1);
-      const src=ctx.createBufferSource();
-      src.buffer=buf;
-      src.loop=true;
-
-      const logMin=Math.log(this.fMin);
-      const logMax=Math.log(this.fMax);
-
-      for(let i=0;i<this.bands;i++){
-        const u=i/(this.bands-1);
-        const f=Math.exp(logMin+(logMax-logMin)*u);
-
-        const bp=ctx.createBiquadFilter();
-        bp.type="bandpass";
-        bp.frequency.value=f;
-        bp.Q.value=10;
-
-        const g=ctx.createGain();
-        g.gain.value=0.0;
-
-        src.connect(bp);
-        bp.connect(g);
-        g.connect(master);
-
-        this.filters.push(bp);
-        this.gains.push(g);
-      }
-
-      src.start();
-      this.noise=src;
+      await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
+      const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
+      node.connect(ctx.destination);
+      this.node=node;
+      this.ready=true;
     }
 
     setEnabled(on){
-      if(!this.ctx) return;
+      if(!this.ctx || !this.node) return;
       this.enabled=!!on;
-      const t=this.ctx.currentTime;
-      const target=this.enabled ? 0.9 : 0.0;
-      this.master.gain.setTargetAtTime(target,t,0.02);
+      this.node.port.postMessage({
+        type:'params',
+        enabled:this.enabled,
+        freqs:[],
+        amps:[]
+      });
     }
 
     updateFromMagnitude(mag){
-      if(!this.ctx || !this.enabled){ this.lastMag=mag; return; }
+      if(!this.ctx || !this.node || !this.enabled){ this.lastMag=mag; return; }
       if(!mag || !mag.length) return;
 
       let mx=0;
-      let total=0;
+      const freqs=[];
+      const amps=[];
+
       for(let i=1;i<mag.length;i++){
         const v=Math.max(0,mag[i]);
+        if(v<0.01) continue;
         mx=Math.max(mx,v);
-        total+=v;
+        freqs.push(this.minFreq + i*this.freqStep);
+        amps.push(v);
       }
 
-      const t=this.ctx.currentTime;
-      const tau=0.03;
-      const bins=mag.length;
-      const silent=total<0.01;
-
-      if(silent){
-        const fallbackIdx=Math.max(0,Math.round(this.bands*0.1));
-        for(let i=0;i<this.bands;i++){
-          const target=i===fallbackIdx ? 0.005 : 0.0;
-          this.gains[i].gain.setTargetAtTime(target,t,tau);
-        }
+      if(!amps.length){
+        this.node.port.postMessage({
+          type:'params',
+          enabled:false,
+          freqs:[],
+          amps:[]
+        });
         this.lastMag=mag;
         return;
       }
 
-      for(let i=0;i<this.bands;i++){
-        const u=i/(this.bands-1);
-        const bin=Math.max(1,Math.min(bins-1,Math.round(u*(bins-1))));
-        const v=mx>0 ? (mag[bin]/mx) : 0;
-        const amp=Math.min(1.0,v);
-        const gated=amp<0.01?0.0:amp;
-        this.gains[i].gain.setTargetAtTime(gated,t,tau);
+      const denom=mx>0?mx:1;
+      for(let i=0;i<amps.length;i++){
+        amps[i]=amps[i]/denom;
       }
+
+      this.node.port.postMessage({
+        type:'params',
+        enabled:true,
+        freqs,
+        amps
+      });
 
       this.lastMag=mag;
     }
