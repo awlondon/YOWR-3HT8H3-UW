@@ -23,7 +23,11 @@
     #mainLayout.spec-hidden #spectrogramPanel{display:none}
     #mainLayout.audio-off #spectrogramPanel,
     #mainLayout.audio-off #oscilloscopePanel{display:none}
-    #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
+    #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto;grid-row:1}
+    #controlsPanel{grid-row:2}
+    #hlsfPanel{grid-row:3}
+    #spectrogramPanel{grid-row:4}
+    #oscilloscopePanel{grid-row:5}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
     .controls{display:flex;flex-direction:column;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
@@ -767,12 +771,32 @@ this._ridgeHold.set(
         this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.liveSpecEnabled));
         this.toggleLiveFftBtn.textContent=this.liveSpecEnabled?"Live FFT: On":"Live FFT: Off";
       }
-      if(this.audioStatusTextEl){
-        this.audioStatusTextEl.textContent=this.audioEnabled?"Audio enabled":"Audio muted";
-      }
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
       this._applyPanelLayout();
+      this._updateAudioStatus();
+    }
+
+    _updateAudioStatus(){
+      const audioCtx=this.audio?.ctx;
+      const state=audioCtx?.state ?? 'suspended';
+      const isRunning=state==='running';
+      if(this.audioStatusBtn){
+        this.audioStatusBtn.textContent=isRunning ? '🔊 Audio ON' : '🔇 Audio OFF';
+        this.audioStatusBtn.style.background=isRunning ? '#042' : '#400';
+        this.audioStatusBtn.style.color='#fff';
+      }
+      if(this.audioStatusTextEl){
+        let label='Audio muted';
+        if(!this.audioEnabled){
+          label='Audio muted';
+        } else if(!isRunning){
+          label='Audio suspended (tap to resume)';
+        } else {
+          label='Audio enabled';
+        }
+        this.audioStatusTextEl.textContent=label;
+      }
     }
     _applyPanelLayout(){
       const audioOff=!this.audioEnabled;
@@ -858,35 +882,29 @@ this._ridgeHold.set(
     }
 
     _bindEvents(){
-      const ensureAudioRunning = async () => {
-        if (!this.audio?.ctx) return;
-        if (this.audio.ctx.state !== 'running') {
-          await this.audio.ctx.resume();
-          console.log('AudioContext resumed:', this.audio.ctx.state);
-        }
-      };
-      window.addEventListener('pointerdown', ensureAudioRunning, { once: true });
-      window.addEventListener('keydown', ensureAudioRunning, { once: true });
       const armAudio=async()=>{
-        if(!this.audioEnabled) return;
+        if(!this.audioEnabled){
+          this.audioEnabled=true;
+          this._syncAudioUi();
+        }
         await this._bootAudio();
+        if(this.audio?.ctx?.state!=='running'){
+          await this.audio.resume();
+        }
+        this.audio.setEnabled(true);
         this._updateAudioStatus();
       };
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
-      window.addEventListener('pointerdown',async()=>{
-        const audioCtx=this.audio?.ctx;
-        if(audioCtx && audioCtx.state!=='running'){
-          await audioCtx.resume();
-          this._updateAudioStatus();
-        }
-      },{once:true});
       if(this.audioStatusBtn){
         this.audioStatusBtn.addEventListener('click',async()=>{
-          const audioCtx=this.audio?.ctx;
-          if(!audioCtx) return;
-          if(audioCtx.state!=='running'){
-            await audioCtx.resume();
+          if(!this.audioEnabled){
+            this.audioEnabled=true;
+            this._syncAudioUi();
+          }
+          await this._bootAudio();
+          if(this.audio?.ctx?.state!=='running'){
+            await this.audio.resume();
           }
           this._updateAudioStatus();
         });
@@ -1038,11 +1056,10 @@ this._ridgeHold.set(
 
     _resizeCanvas(){
       const dpr=Math.max(1,window.devicePixelRatio||1);
-      const rect=this.wrap.getBoundingClientRect();
-      const w=Math.max(1,rect.width);
-      const h=Math.max(1,rect.height);
-      this.canvas.width=Math.max(1,(w*dpr)|0);
-      this.canvas.height=Math.max(1,(h*dpr)|0);
+      const w=Math.max(1,this.wrap.clientWidth|0);
+      const h=Math.max(1,this.wrap.clientHeight|0);
+      this.canvas.width=(w*dpr)|0;
+      this.canvas.height=(h*dpr)|0;
       this.canvas.style.width=`${w}px`;
       this.canvas.style.height=`${h}px`;
       this.ctx.setTransform(1,0,0,1,0,0);
@@ -3222,16 +3239,32 @@ this._ridgeHold.set(
         if(!this.emergentPaused && !this.entityLockRotation) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
         if(this.entityLockRotation) this.emergentAngle=this.lockedAngle;
         const angle=this._snapAngle(this.emergentAngle);
-        if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
-        const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
-        const rotated=new Array(seed.length);
-        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
-        let allTris;
-        if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
-        const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
-        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-        this._updateLiveSpectrogram(allTris,dtSec);
-        drew=true;
+        if(this.gen.level_tris[L]===null){
+          this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels.");
+          this.emergentActive=false;
+          this.emergentPaused=false;
+          this.snapMode=0;
+          this.toggleEmergentBtn.textContent="Emergent Rotation";
+          this.pauseEmergentBtn.disabled=true;
+          this.pauseEmergentBtn.textContent="Pause Emergent";
+          this._updateButtonsEnabled();
+          this._updateModeIndicator();
+          const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
+          if(seed&&seed.length){
+            this._drawDeferred(seed,pivot,angle);
+            drew=true;
+          }
+        } else {
+          const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
+          const rotated=new Array(seed.length);
+          for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
+          let allTris;
+          if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
+          const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          this._updateLiveSpectrogram(allTris,dtSec);
+          drew=true;
+        }
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
           if(!this.entityLockRotation) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
