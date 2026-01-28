@@ -19,8 +19,8 @@
     #mainLayout{display:flex;flex-direction:column;height:100vh;overflow:hidden;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
     #controlsWrap{display:flex;flex-direction:column;min-height:0}
-    #topBar{position:sticky;top:0;z-index:1000;background:#0b0b0b;border-bottom:1px solid var(--border);pointer-events:auto}
-    #mainViewport{display:grid;grid-template-rows:minmax(65vh,1fr) minmax(140px,220px) minmax(90px,120px);height:calc(100vh - var(--toolbar-height));overflow:hidden}
+    #topToolbar{position:sticky;top:0;z-index:1000;background:#0b0b0b;border-bottom:1px solid var(--border);pointer-events:auto}
+    #mainViewport{display:grid;grid-template-rows:minmax(65vh,1fr) 220px minmax(90px,120px);height:calc(100vh - var(--toolbar-height));overflow:hidden}
     #hlsfPanel{grid-row:1}
     #spectrogramPanel{grid-row:2}
     #oscilloscopePanel{grid-row:3}
@@ -64,7 +64,7 @@
     .guide code{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:12px;color:var(--accent)}
     .guide .note{color:var(--muted);font-size:12px}
     header, .controls{position:relative;z-index:10}
-    .panel{position:relative;overflow:hidden;border-top:1px solid var(--border);background:var(--panel);min-height:0}
+    .panel{overflow:hidden;border-top:1px solid var(--border);background:var(--panel);min-height:0}
     .panel-spec{background:radial-gradient(ellipse at top, #0d1220, #05070c)}
     .panel-hlsf{background:#000}
     .panel-wave{background:#050505}
@@ -78,8 +78,11 @@
     canvas{width:100%;height:100%;display:block}
     #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:65vh;overflow:hidden;background:#000}
     #hlsfCanvas{display:block;width:100%;height:100%}
-    #spectrogramPanel{flex:none;overflow:hidden;min-height:140px;max-height:220px}
-    #spectrogramPanel canvas{width:100%;height:100%}
+    #spectrogramPanel{position:relative;height:220px;max-height:220px;overflow:hidden;z-index:1}
+    #spectrogramInner{display:grid;grid-template-columns:1fr 320px;height:100%;gap:8px}
+    #spectrogramCanvas{width:100%;height:100%}
+    #fftStackPanel{display:flex;flex-direction:column;justify-content:flex-start;overflow:hidden;background:#0a0a0a;border-left:1px solid var(--border);padding:8px;box-sizing:border-box}
+    .fftSlice{height:40px;margin-bottom:4px;width:100%;display:block}
     #oscilloscopePanel{flex:none;overflow:hidden;min-height:90px;max-height:120px}
     .hlsf-overlay,
     .spectrogram-overlay,
@@ -107,7 +110,7 @@
 <body>
 <div class="app" id="mainLayout">
   <div id="controlsWrap">
-    <div id="topBar">
+    <div id="topToolbar">
       <header>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
@@ -366,7 +369,10 @@ this._ridgeHold.set(
     </div>
 
     <div id="spectrogramPanel" class="panel panel-spec">
-      <canvas id="spectrogramCanvas"></canvas>
+      <div id="spectrogramInner">
+        <canvas id="spectrogramCanvas"></canvas>
+        <div id="fftStackPanel"></div>
+      </div>
       <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
     </div>
 
@@ -573,7 +579,8 @@ this._ridgeHold.set(
       this.specPanel=document.getElementById('spectrogramPanel');
       this.oscilloscopePanel=document.getElementById('oscilloscopePanel');
       this.specControls=document.querySelector('.spec-controls-panel');
-      this.topBar=document.getElementById('topBar');
+      this.topBar=document.getElementById('topToolbar');
+      this.fftStackPanel=document.getElementById('fftStackPanel');
       this.guide=document.querySelector('.guide');
       this.footer=document.querySelector('footer');
       this.specCanvas=document.getElementById('spectrogramCanvas');
@@ -684,6 +691,7 @@ this._ridgeHold.set(
       this._audioStatusHooked=false;
       this._volumeSendRaf=null;
       this._pendingVolume=null;
+      this._fftSlices=[];
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -693,7 +701,7 @@ this._ridgeHold.set(
         this.specCanvas.height=512;
       }
 
-      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._handleLayoutChange();
+      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._initFftStackPanel(); this._handleLayoutChange();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
@@ -1096,7 +1104,7 @@ this._ridgeHold.set(
 
     _resizeSpectrogram(){
       if(!this.specCanvas || !this.specPanel) return;
-      const rect=this.specPanel.getBoundingClientRect();
+      const rect=this.specCanvas.getBoundingClientRect();
       const dpr=Math.max(1,window.devicePixelRatio||1);
       const w=Math.max(1,rect.width);
       const h=Math.max(1,rect.height);
@@ -1142,6 +1150,10 @@ this._ridgeHold.set(
 
     setLevel(L){
       this._applyLevelChange(L);
+      if(this.specPanel){
+        this.specPanel.style.height='220px';
+        this.specPanel.style.maxHeight='220px';
+      }
     }
 
     _applyLevelChange(L){
@@ -1794,10 +1806,100 @@ this._ridgeHold.set(
       }
     }
 
+    _initFftStackPanel(){
+      if(!this.fftStackPanel) return;
+      const sliceCount=4;
+      this._fftSlices=[];
+      this.fftStackPanel.innerHTML='';
+      for(let i=0;i<sliceCount;i++){
+        const canvas=document.createElement('canvas');
+        canvas.className='fftSlice';
+        canvas.dataset.slice=String(i);
+        this.fftStackPanel.appendChild(canvas);
+        this._fftSlices.push(canvas);
+      }
+    }
+
+    _normalizeFftBins(mag){
+      const normalized=new Float32Array(mag.length);
+      for(let i=1;i<mag.length;i++){
+        normalized[i]=dbToNorm(magToDb(mag[i]));
+      }
+      return normalized;
+    }
+
+    _collectFftSlices(){
+      const slices=[];
+      if(this._entityFFT?.length){
+        slices.push({label:'Entity', data:this._normalizeFftBins(this._entityFFT)});
+      }
+      const liveRows=this._liveSpecBuf?.length ?? 0;
+      if((this.liveSpecEnabled || this._specReplayActive) && liveRows){
+        for(let i=0;i<3;i++){
+          const idx=(this._liveSpecHead-1-i+liveRows)%liveRows;
+          const row=this._liveSpecBuf[idx];
+          if(row && row.length){
+            slices.push({label:i===0?'Live':'History', data:row});
+          }
+        }
+      }
+      return slices;
+    }
+
+    _renderFftStackPanel(){
+      if(!this.fftStackPanel) return;
+      if(!this._fftSlices.length) this._initFftStackPanel();
+      const slices=this._collectFftSlices();
+      for(let i=0;i<this._fftSlices.length;i++){
+        const canvas=this._fftSlices[i];
+        const slice=slices[i] ?? null;
+        this._drawFftSlice(canvas,slice);
+      }
+    }
+
+    _drawFftSlice(canvas,slice){
+      if(!canvas) return;
+      const ctx=canvas.getContext('2d');
+      if(!ctx) return;
+      const dpr=Math.max(1,window.devicePixelRatio||1);
+      const w=canvas.clientWidth|0;
+      const h=canvas.clientHeight|0;
+      if(!(w>0 && h>0)) return;
+      canvas.width=(w*dpr)|0;
+      canvas.height=(h*dpr)|0;
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.scale(dpr,dpr);
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle='#05060a';
+      ctx.fillRect(0,0,w,h);
+      if(!slice || !slice.data || slice.data.length<2){
+        ctx.fillStyle='rgba(255,255,255,0.35)';
+        ctx.font='10px ui-monospace, Menlo, Consolas, monospace';
+        ctx.fillText('FFT —',8,14);
+        return;
+      }
+      const data=slice.data;
+      const bins=data.length-1;
+      const barW=w/Math.max(1,bins);
+      for(let i=1;i<data.length;i++){
+        const value=clamp(data[i],0,1);
+        if(value<=0) continue;
+        const intensity=Math.pow(value,0.85);
+        const [r,g,b]=_specColorRgb(intensity);
+        ctx.fillStyle=`rgb(${r},${g},${b})`;
+        const x=(i-1)*barW;
+        const barH=value*h;
+        ctx.fillRect(x,h-barH,Math.max(1,barW),barH);
+      }
+      ctx.strokeStyle='rgba(255,255,255,0.25)';
+      ctx.strokeRect(0.5,0.5,w-1,h-1);
+    }
+
     _drawSpectrogram(dtSec){
       if(!this.specPanelVisible) return;
       this._renderSpectrogramPanel(dtSec);
       this._drawLiveSpectrogramHUD();
+      this._renderFftStackPanel();
     }
 
     _drawWaveform(){
