@@ -234,6 +234,11 @@
     const [r,g,b]=_specColorRgb(v);
     return `rgb(${r},${g},${b})`;
   }
+  const DB_FLOOR=-80;
+  const DB_CEIL=0;
+  const DB_EPS=1e-6;
+  const magToDb=(mag)=>20*Math.log10(mag+DB_EPS);
+  const dbToNorm=(db)=>clamp((db-DB_FLOOR)/(DB_CEIL-DB_FLOOR),0,1);
 
   function polygonVertices(center,radius,sides){
     const [cx,cy]=center, start=canonicalStartAngle(sides), arr=[];
@@ -361,11 +366,16 @@
       this.liveSpecEnabled=false;
       this.liveSpecEntityK=this.entityIndex ?? 0;
       this.liveSpecBins=128;
-      this.liveSpecRows=80;
-      this.liveSpecEveryMs=100;
+      this.liveSpecRows=120;
+      this.liveSpecEveryMs=80;
+      this.liveSpecSmoothing=0.3;
+      this.liveSpecDbFloor=DB_FLOOR;
+      this.liveSpecDbCeil=DB_CEIL;
       this._liveSpecLastTs=0;
+      this._liveSpecAccumMs=0;
       this._liveSpecHead=0;
       this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(this.liveSpecBins/2));
+      this._liveSpecPrevMag=null;
       this._livePeaks=new Map();
       this._specFrames=[];
       this._specMeta=null;
@@ -746,6 +756,8 @@
       this.liveSpecBins=nextBins*2;
       this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(nextBins));
       this._liveSpecHead=0;
+      this._liveSpecPrevMag=null;
+      this._liveSpecAccumMs=0;
       this._livePeaks.clear();
     }
 
@@ -754,6 +766,7 @@
       this._specRecordStart=performance.now();
       this._specRecording=true;
       this._specReplayActive=false;
+      this._liveSpecPrevMag=null;
       this._specMeta={
         entityK:this.liveSpecEntityK,
         levels:this.levels,
@@ -1164,11 +1177,10 @@
     _normalizeSpectrogram(spectra){
       return spectra.map((row)=>{
         if(!row) return null;
-        let max=0;
-        for(let i=0;i<row.length;i++) max=Math.max(max,row[i]);
-        if(max<=1e-9) return row;
         const normalized=new Float32Array(row.length);
-        for(let i=0;i<row.length;i++) normalized[i]=row[i]/max;
+        for(let i=0;i<row.length;i++){
+          normalized[i]=dbToNorm(magToDb(row[i]));
+        }
         return normalized;
       });
     }
@@ -1599,7 +1611,6 @@
       const grid=Array.from({length:rows},()=>new Float32Array(cols));
       const duration=Math.max(1,frames[frames.length-1]?.t ?? frames.length-1);
 
-      let maxVal=0;
       for(const frame of frames){
         if(typeof frame.level!=="number") continue;
         const row=Math.round(frame.level)-Lmin;
@@ -1610,9 +1621,7 @@
         if(val<=0) continue;
         const prev=grid[row][col];
         if(val>prev) grid[row][col]=val;
-        if(val>maxVal) maxVal=val;
       }
-      if(maxVal<=1e-9) maxVal=1;
 
       const ctx=this.specCtx;
       if(!ctx) return;
@@ -1633,7 +1642,7 @@
         for(let x=0;x<w;x++){
           const u=x/(w-1);
           const col=Math.round(u*(cols-1));
-          const val=row[col]/maxVal;
+          const val=row[col];
           if(val<=0) continue;
           const [r,g,b]=_specColorRgb(Math.pow(val,0.85));
           const idx=(y*w+x)*4;
@@ -1678,7 +1687,7 @@
           const v=1-clamp(y/h,0,1);
           const rowIndex=Math.round(v*(rows-1));
           const level=Lmin+rowIndex;
-          const value=(grid[rowIndex]?.[col]??0)/maxVal;
+          const value=(grid[rowIndex]?.[col]??0);
           return `t ${col} | L ${level} | val ${value.toFixed(3)}`;
         }
       };
@@ -1700,12 +1709,18 @@
         else this._livePeaks.set(bin,next);
       }
     }
-    _updateLiveSpectrogram(tris){
+    _updateLiveSpectrogram(tris,dtSec){
       if(!this.liveSpecEnabled) return;
       if(!this.emergentActive) return;
+      if(this.emergentPaused) return;
 
       const now=performance.now();
-      if(now-this._liveSpecLastTs<this.liveSpecEveryMs) return;
+      const dtMs=(dtSec||0)*1000;
+      this._liveSpecAccumMs+=dtMs;
+      if(this._liveSpecAccumMs<this.liveSpecEveryMs) return;
+      while(this._liveSpecAccumMs>=this.liveSpecEveryMs){
+        this._liveSpecAccumMs-=this.liveSpecEveryMs;
+      }
       this._liveSpecLastTs=now;
 
       if(this._specReplayActive){
@@ -1743,28 +1758,29 @@
       if(!sig) return;
 
       const mag=this._fftMagnitude(sig);
-
-      const alpha=0.25;
-      const prev=this._liveSpecBuf[(this._liveSpecHead-1+this.liveSpecRows)%this.liveSpecRows];
-      for(let i=1;i<mag.length;i++){
-        mag[i]=prev ? alpha*mag[i]+(1-alpha)*prev[i] : mag[i];
+      const alpha=this.liveSpecSmoothing;
+      const prev=this._liveSpecPrevMag;
+      if(prev){
+        for(let i=1;i<mag.length;i++){
+          mag[i]=alpha*mag[i]+(1-alpha)*prev[i];
+        }
       }
-
-      let mx=0;
-      for(let i=1;i<mag.length;i++) if(mag[i]>mx) mx=mag[i];
-      if(mx>1e-9){
-        for(let i=1;i<mag.length;i++) mag[i]/=mx;
-      }
+      this._liveSpecPrevMag=Float32Array.from(mag);
 
       this._trackLivePeaks(mag);
 
-      this._liveSpecBuf[this._liveSpecHead].set(mag);
+      const normalized=new Float32Array(mag.length);
+      for(let i=1;i<mag.length;i++){
+        normalized[i]=dbToNorm(magToDb(mag[i]));
+      }
+
+      this._liveSpecBuf[this._liveSpecHead].set(normalized);
       this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
 
       if(this._specRecording){
         this._specFrames.push({
-          t:Math.round(now-this._specRecordStart),
-          bins:Float32Array.from(mag),
+          t:this._specFrames.length*this.liveSpecEveryMs,
+          bins:Float32Array.from(normalized),
           level:this.levels
         });
         if(this._specMeta){
@@ -1788,8 +1804,8 @@
         return;
       }
 
-      const rows=this.liveSpecRows;
-      const cols=this.liveSpecBins/2;
+      const cols=this.liveSpecRows;
+      const bins=this.liveSpecBins/2;
       const w=this.specCanvas.width;
       const h=this.specCanvas.height;
 
@@ -1798,7 +1814,7 @@
       ctx.fillRect(0,0,w,h);
 
       const logMin=Math.log(1);
-      const logMax=Math.log(Math.max(2,cols-1));
+      const logMax=Math.log(Math.max(2,bins-1));
       const logSpan=logMax-logMin||1;
       const omegaZoom=clamp(this.specZoomOmega,1,8);
       const omegaSpan=logSpan/omegaZoom;
@@ -1806,26 +1822,28 @@
       const omegaMinLog=omegaCenter-omegaSpan/2;
       const omegaMaxLog=omegaCenter+omegaSpan/2;
 
-      const omegaBins=new Int16Array(w);
-      for(let x=0;x<w;x++){
-        const u=x/(w-1);
-        const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
-        omegaBins[x]=clamp(Math.round(Math.exp(logOmega)),1,cols-1);
+      const omegaBins=new Int16Array(h);
+      for(let y=0;y<h;y++){
+        const v=1-(y/(h-1));
+        const logOmega=omegaMinLog+v*(omegaMaxLog-omegaMinLog);
+        omegaBins[y]=clamp(Math.round(Math.exp(logOmega)),1,bins-1);
       }
 
       const img=ctx.createImageData(w,h);
       const data=img.data;
-      for(let y=0;y<h;y++){
-        const v=1-(y/(h-1));
-        const rowIndex=Math.round(v*(rows-1));
-        const idx=(this._liveSpecHead+rowIndex)%rows;
+      for(let x=0;x<w;x++){
+        const u=x/(w-1);
+        const col=Math.round(u*(cols-1));
+        const idx=(this._liveSpecHead+col)%cols;
         const row=this._liveSpecBuf[idx];
         if(!row) continue;
-        for(let x=0;x<w;x++){
-          const bin=omegaBins[x];
+        const fade=0.2+0.8*(col/Math.max(1,cols-1));
+        for(let y=0;y<h;y++){
+          const bin=omegaBins[y];
           const val=row[bin]??0;
           if(val<=0) continue;
-          const [r,g,b]=_specColorRgb(Math.pow(val,0.85));
+          const intensity=Math.pow(val,0.9)*fade;
+          const [r,g,b]=_specColorRgb(intensity);
           const offset=(y*w+x)*4;
           data[offset]=r;
           data[offset+1]=g;
@@ -1836,19 +1854,19 @@
       ctx.putImageData(img,0,0);
 
       ctx.strokeStyle='rgba(255,255,255,0.08)';
-      for(let omega=1;omega<=cols-1;omega*=2){
+      for(let omega=1;omega<=bins-1;omega*=2){
         const u=(Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1);
-        const x=u*w;
-        if(x<0||x>w) continue;
+        const y=(1-u)*h;
+        if(y<0||y>h) continue;
         ctx.beginPath();
-        ctx.moveTo(x,0);
-        ctx.lineTo(x,h);
+        ctx.moveTo(0,y);
+        ctx.lineTo(w,y);
         ctx.stroke();
       }
 
       ctx.fillStyle='rgba(255,255,255,0.85)';
       ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
-      const label=`ω–t | k=${this.liveSpecEntityK+1} | bins=${cols}`;
+      const label=`ω–t | k=${this.liveSpecEntityK+1} | hop=${this.liveSpecEveryMs}ms`;
       ctx.fillText(label,12,18);
       ctx.restore();
 
@@ -1857,13 +1875,14 @@
         readoutAt:(x,y)=>{
           if(x<0||y<0||x>w||y>h) return null;
           const u=clamp(x/w,0,1);
-          const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
-          const omegaBin=clamp(Math.round(Math.exp(logOmega)),1,cols-1);
+          const col=Math.round(u*(cols-1));
+          const rowIdx=(this._liveSpecHead+col)%cols;
           const v=1-clamp(y/h,0,1);
-          const rowIndex=Math.round(v*(rows-1));
-          const rowIdx=(this._liveSpecHead+rowIndex)%rows;
+          const logOmega=omegaMinLog+v*(omegaMaxLog-omegaMinLog);
+          const omegaBin=clamp(Math.round(Math.exp(logOmega)),1,bins-1);
           const value=this._liveSpecBuf[rowIdx]?.[omegaBin]??0;
-          return `ω ${omegaBin} | t ${rowIndex} | val ${value.toFixed(3)}`;
+          const tMs=col*this.liveSpecEveryMs;
+          return `ω ${omegaBin} | t ${tMs}ms | val ${value.toFixed(3)}`;
         }
       };
     }
@@ -2105,7 +2124,7 @@
         if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-        this._updateLiveSpectrogram(allTris);
+        this._updateLiveSpectrogram(allTris,dtSec);
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
