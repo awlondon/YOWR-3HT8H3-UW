@@ -7,6 +7,8 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.table = new Float32Array(0);
     this.speed = 1;
     this.gateThreshold = 0.02;
+    this.userVolume = 0.08;
+    this.minAudible = 0.0035;
     this.hpPrevX = 0;
     this.hpPrevY = 0;
     this.enabled = false;
@@ -14,6 +16,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.monitorRate = 128;
     this.monitorBuffer = new Float32Array(256);
     this.monitorWrite = 0;
+    this.frameCount = 0;
 
     this.port.onmessage = (e) => {
       const msg = e.data;
@@ -26,6 +29,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
         }
         if (Number.isFinite(msg.speed)) this.speed = msg.speed;
         if (Number.isFinite(msg.gateThreshold)) this.gateThreshold = msg.gateThreshold;
+        if (Number.isFinite(msg.userVolume)) this.userVolume = msg.userVolume;
         this.enabled = msg.enabled === true;
       }
     };
@@ -50,7 +54,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       type: 'monitor',
       wave: slice,
       rms,
-      gated: rms < this.gateThreshold
+      gated: rms < this.minAudible
     });
   }
 
@@ -89,7 +93,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       prevY = hp;
       sample = Math.tanh(hp);
 
-      output[i] = Math.max(-0.9, Math.min(0.9, sample));
+      output[i] = sample;
 
       phase += speed;
       if (phase >= tableLen) phase -= tableLen * Math.floor(phase / tableLen);
@@ -101,8 +105,16 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     }
 
     const rms = Math.sqrt(sumSq / output.length);
-    if (rms < this.gateThreshold) {
-      output.fill(0);
+    const minAudible = this.minAudible;
+    const gain = rms > 0 ? Math.max(rms, minAudible) : 0;
+    const finalGain = Math.min(1.0, gain * (this.userVolume ?? 0.08));
+    for (let i = 0; i < output.length; i++) {
+      const sample = output[i] * finalGain;
+      output[i] = Math.max(-0.9, Math.min(0.9, sample));
+    }
+
+    if ((this.frameCount++ % 60) === 0) {
+      console.log("RMS:", rms.toFixed(5));
     }
 
     for (let i = 0; i < output.length; i++) {

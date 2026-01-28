@@ -3286,8 +3286,8 @@ this._ridgeHold.set(
       this.wavetable=new Float32Array(0);
       this.speed=1;
       this.gateThreshold=0.02;
+      this.userVolume=0.08;
       this.onMonitor=null;
-      this.masterGain=null;
     }
 
     async init(){
@@ -3298,21 +3298,18 @@ this._ridgeHold.set(
       this.ctx=ctx;
       await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
-      const masterGain=ctx.createGain();
-      masterGain.gain.value=0.08;
-      node.connect(masterGain);
-      masterGain.connect(ctx.destination);
+      node.connect(ctx.destination);
       node.port.onmessage=(event)=>{
         if(this.onMonitor) this.onMonitor(event);
       };
       this.node=node;
-      this.masterGain=masterGain;
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
         speed:this.speed,
-        gateThreshold:this.gateThreshold
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume
       });
     }
 
@@ -3321,20 +3318,27 @@ this._ridgeHold.set(
       if(this.ctx.state==="suspended") await this.ctx.resume().catch(()=>{});
     }
 
-    _postParams({enabled,wavetable,speed,gateThreshold}){
+    _postParams({enabled,wavetable,speed,gateThreshold,userVolume}){
       if(!this.node) return;
       this.node.port.postMessage({
         type:'params',
         enabled,
         wavetable,
         speed,
-        gateThreshold
+        gateThreshold,
+        userVolume
       });
     }
     setVolume(v){
-      if(!this.masterGain || !this.ctx) return;
-      const t=this.ctx.currentTime;
-      this.masterGain.gain.setTargetAtTime(Math.max(0,v),t,0.015);
+      if(!Number.isFinite(v)) return;
+      this.userVolume=Math.max(0,v);
+      this._postParams({
+        enabled:this.enabled,
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume
+      });
     }
 
     setEnabled(on){
@@ -3344,7 +3348,8 @@ this._ridgeHold.set(
         enabled:this.enabled,
         wavetable:this.wavetable,
         speed:this.speed,
-        gateThreshold:this.gateThreshold
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume
       });
     }
 
@@ -3361,7 +3366,8 @@ this._ridgeHold.set(
           enabled:false,
           wavetable:new Float32Array(0),
           speed:this.speed,
-          gateThreshold:this.gateThreshold
+          gateThreshold:this.gateThreshold,
+          userVolume:this.userVolume
         });
         return;
       }
@@ -3370,7 +3376,8 @@ this._ridgeHold.set(
         enabled:true,
         wavetable:this.wavetable,
         speed:this.speed,
-        gateThreshold:this.gateThreshold
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume
       });
     }
   }
