@@ -380,6 +380,11 @@
       this._liveSpecBuf=Array.from({length:this.liveSpecRows},()=>new Float32Array(this.liveSpecBins/2));
       this._liveSpecPrevMag=null;
       this._livePeaks=new Map();
+      // Peak-hold state
+      this._ridgeHold=new Map(); // bin -> strength [0..1]
+      this._ridgeDecay=0.92;     // per-frame decay
+      this._ridgeBoost=0.35;     // add when detected
+      this._ridgeTopK=3;         // peaks per frame
       this._specFrames=[];
       this._specMeta=null;
       this._specRecordStart=0;
@@ -731,6 +736,7 @@
       this._specReplayIndex=0;
       this._specReplayStart=performance.now();
       this._livePeaks.clear();
+      this._ridgeHold.clear();
       this._statusMsg(`Replaying spectrogram session (${this._specFrames.length} frames).`);
       this._render();
     }
@@ -763,6 +769,7 @@
       this._liveSpecPrevMag=null;
       this._liveSpecAccumMs=0;
       this._livePeaks.clear();
+      this._ridgeHold.clear();
     }
 
     _startSpectrogramRecording(){
@@ -1713,6 +1720,30 @@
         else this._livePeaks.set(bin,next);
       }
     }
+    _updateRidgeHold(mag){
+      // detect local peaks
+      const peaks=[];
+      for(let i=2;i<mag.length-2;i++){
+        if(mag[i]>mag[i-1]&&mag[i]>mag[i+1]){
+          peaks.push([i,mag[i]]);
+        }
+      }
+      peaks.sort((a,b)=>b[1]-a[1]);
+      const top=peaks.slice(0,this._ridgeTopK);
+
+      // decay existing
+      for(const [bin,val] of this._ridgeHold.entries()){
+        const next=val*this._ridgeDecay;
+        if(next<0.02) this._ridgeHold.delete(bin);
+        else this._ridgeHold.set(bin,next);
+      }
+
+      // reinforce detected peaks
+      for(const [bin,val] of top){
+        const cur=this._ridgeHold.get(bin)||0;
+        this._ridgeHold.set(bin,Math.min(1,cur+val*this._ridgeBoost));
+      }
+    }
     _updateLiveSpectrogram(tris,dtSec){
       if(!this.liveSpecEnabled) return;
       if(!this.emergentActive) return;
@@ -1734,6 +1765,7 @@
           this._liveSpecBuf[this._liveSpecHead].set(frame.bins);
           this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
           this._trackLivePeaks(frame.bins);
+          this._updateRidgeHold(frame.bins);
           if(typeof frame.level==="number"){
             if(this._specReplayLevel===null){
               this._specReplayLevel=frame.level;
@@ -1778,6 +1810,7 @@
         normalized[i]=dbToNorm(magToDb(mag[i]));
       }
 
+      this._updateRidgeHold(normalized);
       this._liveSpecBuf[this._liveSpecHead].set(normalized);
       this._liveSpecHead=(this._liveSpecHead+1)%this.liveSpecRows;
 
@@ -2046,6 +2079,30 @@
           ctx.fillRect(x,y,colW+1,h+1);
         }
       }
+
+      // --- ridge overlays ---
+      ctx.save();
+      ctx.globalAlpha=0.9;
+      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.lineWidth=1;
+
+      const binToRidgeY=(bin)=>{
+        const u=(Math.log(bin)-logMin)/(logMax-logMin);
+        return y0+panelH-u*panelH;
+      };
+
+      for(const [bin,strength] of this._ridgeHold.entries()){
+        if(bin<=1||bin>=bins) continue;
+        const y=binToRidgeY(bin);
+        const alpha=clamp(strength,0,1);
+        ctx.globalAlpha=alpha;
+
+        ctx.beginPath();
+        ctx.moveTo(x0,y);
+        ctx.lineTo(x0+panelW,y);
+        ctx.stroke();
+      }
+      ctx.restore();
 
       // --- labels ---
       ctx.globalAlpha=1;
