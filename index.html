@@ -69,6 +69,8 @@
     .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border)}
     .spec-meta{font-size:12px;color:var(--muted)}
     .spec-hidden #specPanel{display:none;}
+    .scope-panel{border-top:1px solid var(--border);background:#000}
+    .scope-header{padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
     .canvas-wrap::after{content:"";position:absolute;inset:0;pointer-events:none;background:
       radial-gradient(circle at center, rgba(108,204,255,0.35) 0 1px, transparent 1px),
@@ -313,7 +315,10 @@ this._ridgeHold.set(
         <canvas id="specCanvas" width="1024" height="512"></canvas>
         <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
       </div>
-      <canvas id="waveCanvas" style="width:100%;height:140px;"></canvas>
+      <div class="scope-panel">
+        <div class="scope-header">Oscilloscope</div>
+        <canvas id="scopeCanvas" style="width:100%;height:160px;"></canvas>
+      </div>
     </div>
   </div>
 
@@ -512,10 +517,15 @@ this._ridgeHold.set(
       this.specCanvas=document.getElementById('specCanvas');
       this.specCtx=this.specCanvas?this.specCanvas.getContext('2d'):null;
       this.specReadout=document.getElementById('specReadout');
-      this.waveCanvas=document.getElementById('waveCanvas');
-      this.waveCtx=this.waveCanvas?this.waveCanvas.getContext('2d'):null;
-      this.waveBuf=new Float32Array(2048);
-      this.waveWrite=0;
+      this.scopeCanvas=document.getElementById('scopeCanvas');
+      this.scopeCtx=this.scopeCanvas?this.scopeCanvas.getContext('2d'):null;
+      this.scopeBuf=new Float32Array(512);
+      this.scopeWrite=0;
+      this.scopeRMS=0;
+      this.scopeGated=true;
+      this.scopeRmsBuf=new Float32Array(256);
+      this.scopeRmsWrite=0;
+      this.scopeClipPeak=0;
       this.specViewOmegaLevelBtn=document.getElementById('specViewOmegaLevel');
       this.specViewOmegaTimeBtn=document.getElementById('specViewOmegaTime');
       this.specViewLevelTimeBtn=document.getElementById('specViewLevelTime');
@@ -594,6 +604,7 @@ this._ridgeHold.set(
       // --- Audio (view-updated wavetable) ---
       this.audioEnabled=true;         // start enabled for default audio playback
       this.audio=new AudioEngine();
+      this.audio.onMonitor=(event)=>this._handleMonitorFrame(event?.data);
       this._audioEveryMs=50;
       this._audioLastTs=0;
       this._audioWavetableSize=512;
@@ -602,7 +613,6 @@ this._ridgeHold.set(
       this._audioGateThreshold=0.02;
       this._audioWavetable=null;
       this._audioSpeed=1;
-      this._audioWavePhase=0;
       this._lastAudioMag=null;
 
       this.sidesInput.value=String(this.sides);
@@ -903,14 +913,14 @@ this._ridgeHold.set(
       this.canvas.width=Math.max(1,(w*dpr)|0); this.canvas.height=Math.max(1,(h*dpr)|0);
       this.canvas.style.width=w+'px'; this.canvas.style.height=h+'px';
       this.ctx.setTransform(1,0,0,1,0,0); this.ctx.scale(dpr,dpr);
-      if(this.waveCanvas && this.waveCtx){
-        const waveDpr=Math.max(1,window.devicePixelRatio||1);
-        const waveW=this.waveCanvas.clientWidth||600;
-        const waveH=this.waveCanvas.clientHeight||140;
-        this.waveCanvas.width=(waveW*waveDpr)|0;
-        this.waveCanvas.height=(waveH*waveDpr)|0;
-        this.waveCtx.setTransform(1,0,0,1,0,0);
-        this.waveCtx.scale(waveDpr,waveDpr);
+      if(this.scopeCanvas && this.scopeCtx){
+        const scopeDpr=Math.max(1,window.devicePixelRatio||1);
+        const scopeW=this.scopeCanvas.clientWidth||600;
+        const scopeH=this.scopeCanvas.clientHeight||160;
+        this.scopeCanvas.width=(scopeW*scopeDpr)|0;
+        this.scopeCanvas.height=(scopeH*scopeDpr)|0;
+        this.scopeCtx.setTransform(1,0,0,1,0,0);
+        this.scopeCtx.scale(scopeDpr,scopeDpr);
       }
     }
 
@@ -1153,70 +1163,94 @@ this._ridgeHold.set(
       return out.length ? out : null;
     }
 
-    _pushWaveSample(x){
-      if(!this.waveBuf) return;
-      this.waveBuf[this.waveWrite]=x;
-      this.waveWrite=(this.waveWrite+1)%this.waveBuf.length;
-    }
-
-    _updateWaveformSamples(){
-      if(!this.waveBuf) return;
-      const table=this._audioWavetable;
-      if(!table || !table.length) return;
-      const len=table.length;
-      const speed=Math.max(0.001,this._audioSpeed||1);
-      let phase=this._audioWavePhase;
-      const sampleCount=256;
-      for(let i=0;i<sampleCount;i++){
-        const idx=Math.floor(phase);
-        const frac=phase-idx;
-        const a=table[idx%len];
-        const b=table[(idx+1)%len];
-        this._pushWaveSample(a+(b-a)*frac);
-        phase+=speed;
-        if(phase>=len) phase-=len*Math.floor(phase/len);
+    _handleMonitorFrame(m){
+      if(!m || m.type !== 'monitor') return;
+      const w=m.wave;
+      if(!w || !w.length) return;
+      let clipPeak=0;
+      for(let i=0;i<w.length;i++){
+        const sample=w[i];
+        this.scopeBuf[this.scopeWrite]=sample;
+        this.scopeWrite=(this.scopeWrite+1)%this.scopeBuf.length;
+        clipPeak=Math.max(clipPeak,Math.abs(sample));
       }
-      this._audioWavePhase=phase;
+      this.scopeRMS=m.rms || 0;
+      this.scopeGated=!!m.gated;
+      this.scopeRmsBuf[this.scopeRmsWrite]=this.scopeRMS;
+      this.scopeRmsWrite=(this.scopeRmsWrite+1)%this.scopeRmsBuf.length;
+      this.scopeClipPeak=clipPeak;
     }
 
-    _drawWaveformPanel(){
-      if(!this.waveCanvas || !this.waveCtx) return;
-
-      const ctx=this.waveCtx;
-      const w=this.waveCanvas.clientWidth;
-      const h=this.waveCanvas.clientHeight;
+    _drawOscilloscope(){
+      if(!this.scopeCanvas || !this.scopeCtx) return;
+      const ctx=this.scopeCtx;
+      const w=this.scopeCanvas.clientWidth;
+      const h=this.scopeCanvas.clientHeight;
+      if(!(w>0 && h>0)) return;
 
       ctx.clearRect(0,0,w,h);
-      ctx.fillStyle=this.whiteBg?'#fff':'#000';
+      ctx.fillStyle='#000';
       ctx.fillRect(0,0,w,h);
 
-      ctx.globalAlpha=0.25;
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
+      ctx.strokeStyle='#333';
+      ctx.lineWidth=1;
       ctx.beginPath();
       ctx.moveTo(0,h/2);
       ctx.lineTo(w,h/2);
       ctx.stroke();
-      ctx.globalAlpha=1;
 
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
-      ctx.lineWidth=1;
-
-      const N=this.waveBuf.length;
-      const start=this.waveWrite;
+      ctx.strokeStyle='#441111';
       ctx.beginPath();
+      ctx.moveTo(0,0);
+      ctx.lineTo(w,0);
+      ctx.moveTo(0,h);
+      ctx.lineTo(w,h);
+      ctx.stroke();
+
+      ctx.strokeStyle=this.scopeGated ? '#555' : '#0f0';
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      const N=this.scopeBuf.length;
       for(let i=0;i<N;i++){
-        const idx=(start+i)%N;
-        const v=this.waveBuf[idx];
+        const idx=(this.scopeWrite+i)%N;
         const x=(i/(N-1))*w;
-        const y=(h/2)-v*(h*0.42);
+        const y=(h/2)-this.scopeBuf[idx]*(h*0.5);
         if(i===0) ctx.moveTo(x,y);
         else ctx.lineTo(x,y);
       }
       ctx.stroke();
 
-      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillStyle=this.whiteBg?'#000':'#fff';
-      ctx.fillText('Waveform (audio time-series)',8,14);
+      const rmsH=Math.min(32,h*0.25);
+      const rmsTop=h-rmsH;
+      ctx.strokeStyle='#224';
+      ctx.beginPath();
+      ctx.moveTo(0,rmsTop);
+      ctx.lineTo(w,rmsTop);
+      ctx.stroke();
+
+      ctx.strokeStyle='#6cf';
+      ctx.beginPath();
+      const R=this.scopeRmsBuf.length;
+      for(let i=0;i<R;i++){
+        const idx=(this.scopeRmsWrite+i)%R;
+        const v=Math.min(1,Math.max(0,this.scopeRmsBuf[idx]));
+        const x=(i/(R-1))*w;
+        const y=(rmsTop+rmsH)-(v*rmsH);
+        if(i===0) ctx.moveTo(x,y);
+        else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+
+      const clipActive=this.scopeClipPeak>1;
+      ctx.fillStyle='#ccc';
+      ctx.font='11px ui-monospace';
+      const clipLabel=clipActive?' | CLIP':'';
+      ctx.fillText(
+        `RMS: ${this.scopeRMS.toFixed(4)}  |  ${this.scopeGated ? 'GATED' : 'ACTIVE'}${clipLabel}`,
+        8, 14
+      );
+      ctx.fillStyle='#888';
+      ctx.fillText('RMS trace',8,rmsTop+14);
     }
 
     _computeAudioWavetable(){
@@ -1349,7 +1383,6 @@ this._ridgeHold.set(
           this.audio.updateFromWavetable({wavetable:new Float32Array(0),speed:this._audioSpeed});
         }
       }
-      this._updateWaveformSamples();
     }
 
     analysisTick(dtSec){
@@ -3007,7 +3040,7 @@ this._ridgeHold.set(
       }
       this._drawLiveSpectrogramHUD();
       this._updateAudioTick();
-      this._drawWaveformPanel();
+      this._drawOscilloscope();
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
@@ -3183,6 +3216,7 @@ this._ridgeHold.set(
       this.speed=1;
       this.gain=1;
       this.gateThreshold=0.02;
+      this.onMonitor=null;
     }
 
     async init(){
@@ -3194,6 +3228,9 @@ this._ridgeHold.set(
       await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
       node.connect(ctx.destination);
+      node.port.onmessage=(event)=>{
+        if(this.onMonitor) this.onMonitor(event);
+      };
       this.node=node;
       this.ready=true;
       this._postParams({

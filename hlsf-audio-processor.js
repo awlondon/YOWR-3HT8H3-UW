@@ -11,6 +11,10 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.hpPrevX = 0;
     this.hpPrevY = 0;
     this.enabled = false;
+    this.monitorCounter = 0;
+    this.monitorRate = 128;
+    this.monitorBuffer = new Float32Array(256);
+    this.monitorWrite = 0;
 
     this.port.onmessage = (e) => {
       const msg = e.data;
@@ -29,6 +33,29 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     };
   }
 
+  _pushMonitorSample(sample){
+    this.monitorBuffer[this.monitorWrite] = sample;
+    this.monitorWrite = (this.monitorWrite + 1) % this.monitorBuffer.length;
+  }
+
+  _emitMonitorFrame(){
+    const slice = new Float32Array(this.monitorBuffer.length);
+    let rms = 0;
+    for (let i = 0; i < slice.length; i++) {
+      const idx = (this.monitorWrite + i) % this.monitorBuffer.length;
+      const v = this.monitorBuffer[idx];
+      slice[i] = v;
+      rms += v * v;
+    }
+    rms = Math.sqrt(rms / slice.length);
+    this.port.postMessage({
+      type: 'monitor',
+      wave: slice,
+      rms,
+      gated: rms < this.gateThreshold
+    });
+  }
+
   process(inputs, outputs){
     const output = outputs[0][0];
     const table = this.table;
@@ -36,6 +63,13 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
 
     if (!this.enabled || tableLen === 0) {
       output.fill(0);
+      for (let i = 0; i < output.length; i++) {
+        this._pushMonitorSample(0);
+      }
+      this.monitorCounter++;
+      if (this.monitorCounter % this.monitorRate === 0) {
+        this._emitMonitorFrame();
+      }
       return true;
     }
 
@@ -46,7 +80,6 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     let prevX = this.hpPrevX;
     let prevY = this.hpPrevY;
 
-    let sumSq = 0;
     for (let i = 0; i < output.length; i++) {
       const idx = Math.floor(phase);
       const frac = phase - idx;
@@ -60,15 +93,27 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       sample = Math.tanh(hp);
 
       output[i] = sample;
-      sumSq += sample * sample;
 
       phase += speed;
       if (phase >= tableLen) phase -= tableLen * Math.floor(phase / tableLen);
     }
 
+    let sumSq = 0;
+    for (let i = 0; i < output.length; i++) {
+      sumSq += output[i] * output[i];
+    }
+
     const rms = Math.sqrt(sumSq / output.length);
     if (rms < this.gateThreshold) {
       output.fill(0);
+    }
+
+    for (let i = 0; i < output.length; i++) {
+      this._pushMonitorSample(output[i]);
+    }
+    this.monitorCounter++;
+    if (this.monitorCounter % this.monitorRate === 0) {
+      this._emitMonitorFrame();
     }
 
     this.phase = phase;
