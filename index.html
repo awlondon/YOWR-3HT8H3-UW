@@ -81,6 +81,8 @@
       linear-gradient(to bottom, transparent 49.8%, rgba(108,204,255,0.12) 49.8%, rgba(108,204,255,0.12) 50.2%, transparent 50.2%);
       opacity:0.35}
     .help{color:var(--muted)} .status{color:var(--muted)}
+    .audio-control{display:flex;align-items:center;gap:8px}
+    .audio-control input[type="range"]{width:140px}
     .entity-label{font-size:12px;color:var(--muted)}
     body.focus-mode header,
     body.focus-mode .controls,
@@ -191,6 +193,13 @@
           </div>
           <div class="row" style="margin-top:8px;">
             <span class="status" id="audioStatus">Audio muted</span>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <div class="audio-control">
+              <label for="volumeSlider">Volume</label>
+              <input id="volumeSlider" type="range" min="0" max="30" value="12" />
+              <span id="volumeLabel">12%</span>
+            </div>
           </div>
         </div>
         <div class="group" style="grid-column: span 6;" data-focus-lock="true">
@@ -511,6 +520,8 @@ this._ridgeHold.set(
       this.toggleLiveFftBtn=document.getElementById('toggleLiveFft');
       this.cycleLiveEntityBtn=document.getElementById('cycleLiveEntity');
       this.audioStatusEl=document.getElementById('audioStatus');
+      this.volumeSlider=document.getElementById('volumeSlider');
+      this.volumeLabel=document.getElementById('volumeLabel');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
@@ -636,6 +647,7 @@ this._ridgeHold.set(
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._syncAudioUi();
+      this._applyVolumeFromSlider();
       this._bootAudio();
       this._loop();
     }
@@ -719,6 +731,13 @@ this._ridgeHold.set(
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
     }
+    _applyVolumeFromSlider(){
+      if(!this.volumeSlider || !this.volumeLabel) return;
+      const ui=Number(this.volumeSlider.value)/100;
+      const gain=ui*ui;
+      this.volumeLabel.textContent=`${this.volumeSlider.value}%`;
+      this.audio.setVolume(gain);
+    }
     _refreshAudioParams(){
       if(!this.audioEnabled) return;
       const params=this._computeAudioWavetable();
@@ -736,6 +755,7 @@ this._ridgeHold.set(
       await this.audio.init();
       await this.audio.resume();
       this.audio.setEnabled(true);
+      this._applyVolumeFromSlider();
       this._refreshAudioParams();
     }
     async _toggleAudio(){
@@ -795,6 +815,9 @@ this._ridgeHold.set(
       }
       if(this.cycleLiveEntityBtn){
         this.cycleLiveEntityBtn.addEventListener('click',()=>this._cycleLiveEntity());
+      }
+      if(this.volumeSlider){
+        this.volumeSlider.addEventListener('input',()=>this._applyVolumeFromSlider());
       }
 
       // Rotation speed controls + sync
@@ -1355,9 +1378,10 @@ this._ridgeHold.set(
       if(!(std>1e-6)) return null;
 
       const wavetable=new Float32Array(N);
+      const binNorm=1/Math.sqrt(N);
       for(let i=0;i<N;i++){
         const v=(signal[i]-mean)/(std+1e-6);
-        wavetable[i]=clamp(v,-3,3)/3;
+        wavetable[i]=clamp(v,-3,3)/3*binNorm;
       }
 
       const [px,py]=pivot;
@@ -1376,7 +1400,6 @@ this._ridgeHold.set(
       return {
         wavetable,
         speed,
-        gain:1,
         gateThreshold:this._audioGateThreshold,
         enabled:true
       };
@@ -3256,9 +3279,9 @@ this._ridgeHold.set(
 
       this.wavetable=new Float32Array(0);
       this.speed=1;
-      this.gain=1;
       this.gateThreshold=0.02;
       this.onMonitor=null;
+      this.masterGain=null;
     }
 
     async init(){
@@ -3269,17 +3292,20 @@ this._ridgeHold.set(
       this.ctx=ctx;
       await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
-      node.connect(ctx.destination);
+      const masterGain=ctx.createGain();
+      masterGain.gain.value=0.08;
+      node.connect(masterGain);
+      masterGain.connect(ctx.destination);
       node.port.onmessage=(event)=>{
         if(this.onMonitor) this.onMonitor(event);
       };
       this.node=node;
+      this.masterGain=masterGain;
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
         speed:this.speed,
-        gain:this.gain,
         gateThreshold:this.gateThreshold
       });
     }
@@ -3289,16 +3315,20 @@ this._ridgeHold.set(
       if(this.ctx.state==="suspended") await this.ctx.resume().catch(()=>{});
     }
 
-    _postParams({enabled,wavetable,speed,gain,gateThreshold}){
+    _postParams({enabled,wavetable,speed,gateThreshold}){
       if(!this.node) return;
       this.node.port.postMessage({
         type:'params',
         enabled,
         wavetable,
         speed,
-        gain,
         gateThreshold
       });
+    }
+    setVolume(v){
+      if(!this.masterGain || !this.ctx) return;
+      const t=this.ctx.currentTime;
+      this.masterGain.gain.setTargetAtTime(Math.max(0,v),t,0.015);
     }
 
     setEnabled(on){
@@ -3308,17 +3338,15 @@ this._ridgeHold.set(
         enabled:this.enabled,
         wavetable:this.wavetable,
         speed:this.speed,
-        gain:this.gain,
         gateThreshold:this.gateThreshold
       });
     }
 
-    updateFromWavetable({wavetable,speed,gain=1,gateThreshold}={}){
+    updateFromWavetable({wavetable,speed,gateThreshold}={}){
       if(wavetable){
         this.wavetable=wavetable;
       }
       if(Number.isFinite(speed)) this.speed=speed;
-      if(Number.isFinite(gain)) this.gain=gain;
       if(Number.isFinite(gateThreshold)) this.gateThreshold=gateThreshold;
 
       if(!this.ctx || !this.node || !this.enabled) return;
@@ -3327,7 +3355,6 @@ this._ridgeHold.set(
           enabled:false,
           wavetable:new Float32Array(0),
           speed:this.speed,
-          gain:this.gain,
           gateThreshold:this.gateThreshold
         });
         return;
@@ -3337,7 +3364,6 @@ this._ridgeHold.set(
         enabled:true,
         wavetable:this.wavetable,
         speed:this.speed,
-        gain:this.gain,
         gateThreshold:this.gateThreshold
       });
     }
