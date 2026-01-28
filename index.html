@@ -35,6 +35,15 @@
     .levels{display:flex;flex-wrap:wrap;gap:6px}.lvl-btn{min-width:32px;text-align:center}.lvl-btn.active{outline:2px solid var(--accent)}
     .code-label{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:13px;color:var(--accent);padding:4px 8px;background:#0f0f0f;border-radius:8px;border:1px solid var(--border);max-width:100%;overflow:hidden;text-overflow:ellipsis}
     .code-stack{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .guide{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+    .guide details{background:#0f0f0f;border:1px solid var(--border);border-radius:12px;padding:10px 12px}
+    .guide summary{cursor:pointer;font-weight:600;color:var(--ink);letter-spacing:.2px}
+    .guide summary span{color:var(--muted);font-weight:500;margin-left:6px}
+    .guide h4{margin:12px 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+    .guide ul{margin:6px 0 10px;padding-left:18px;color:var(--ink)}
+    .guide li{margin:4px 0}
+    .guide code{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:12px;color:var(--accent)}
+    .guide .note{color:var(--muted);font-size:12px}
     .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,38%);gap:12px;min-height:0;padding:0 12px 12px}
     .main.spec-hidden{grid-template-columns:minmax(0,1fr)}
     .panel{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
@@ -165,6 +174,49 @@
       <input id="specFileInput" type="file" accept="application/json" style="display:none" />
     </div>
   </div>
+
+  <section class="guide" aria-label="Ridge tuning guide">
+    <details open>
+      <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
+      <h4>1) Ridge selectivity (Top-K)</h4>
+      <ul>
+        <li><code>this._ridgeTopK = 2</code> → very tonal, sparse</li>
+        <li><code>this._ridgeTopK = 3</code> → balanced (recommended)</li>
+        <li><code>this._ridgeTopK = 5</code> → dense, chord-like</li>
+      </ul>
+      <div class="note">Rule: low sides / low levels → smaller K. High sides / emergent rotation → larger K.</div>
+
+      <h4>2) Persistence (decay)</h4>
+      <ul>
+        <li><code>this._ridgeDecay = 0.90</code> → fast fade (percussive)</li>
+        <li><code>this._ridgeDecay = 0.94</code> → musical sustain</li>
+        <li><code>this._ridgeDecay = 0.97</code> → drone / structural memory</li>
+      </ul>
+      <div class="note">Interpretation: &lt; 0.9 = noisy, 0.97 = everything sticks forever. Sweet spot: 0.92–0.95.</div>
+
+      <h4>3) Reinforcement strength</h4>
+      <ul>
+        <li><code>this._ridgeBoost = 0.25</code> → conservative</li>
+        <li><code>this._ridgeBoost = 0.35</code> → default</li>
+        <li><code>this._ridgeBoost = 0.50</code> → aggressive locking</li>
+      </ul>
+      <div class="note">If ridges “snap” too hard → lower boost. If ridges never form → raise boost.</div>
+
+      <h4>4) Optional: frequency-weighted bias (recommended)</h4>
+      <p class="note">Higher ω bins are noisier. Bias against them so low/mid harmonics dominate naturally.</p>
+      <pre class="code-label">const weight = 1 - (bin / mag.length);
+this._ridgeHold.set(
+  bin,
+  Math.min(1, cur + val * weight * this._ridgeBoost)
+);</pre>
+
+      <h4>5) Visual encoding (small but important)</h4>
+      <p class="note">Instead of pure white, use blue-white ridges for dark mode:</p>
+      <pre class="code-label">ctx.strokeStyle = this.whiteBg
+  ? `rgba(0,0,0,${alpha})`
+  : `rgba(180,220,255,${alpha})`;</pre>
+    </details>
+  </section>
 
   <div class="main" id="mainPanel">
     <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
@@ -1741,7 +1793,8 @@
       // reinforce detected peaks
       for(const [bin,val] of top){
         const cur=this._ridgeHold.get(bin)||0;
-        this._ridgeHold.set(bin,Math.min(1,cur+val*this._ridgeBoost));
+        const weight=1-(bin/mag.length);
+        this._ridgeHold.set(bin,Math.min(1,cur+val*weight*this._ridgeBoost));
       }
     }
     _updateLiveSpectrogram(tris,dtSec){
@@ -2082,8 +2135,6 @@
 
       // --- ridge overlays ---
       ctx.save();
-      ctx.globalAlpha=0.9;
-      ctx.strokeStyle=this.whiteBg?'#000':'#fff';
       ctx.lineWidth=1;
 
       const binToRidgeY=(bin)=>{
@@ -2095,7 +2146,9 @@
         if(bin<=1||bin>=bins) continue;
         const y=binToRidgeY(bin);
         const alpha=clamp(strength,0,1);
-        ctx.globalAlpha=alpha;
+        ctx.strokeStyle=this.whiteBg
+          ? `rgba(0,0,0,${alpha})`
+          : `rgba(180,220,255,${alpha})`;
 
         ctx.beginPath();
         ctx.moveTo(x0,y);
