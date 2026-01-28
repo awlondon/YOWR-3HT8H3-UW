@@ -959,6 +959,7 @@ this._ridgeHold.set(
       if(!Ctx){ this._statusMsg("WebAudio not supported."); return; }
 
       this.audioCtx=new Ctx({latencyHint:"interactive"});
+      if(this.audioCtx.state==="suspended") await this.audioCtx.resume();
 
       // Preferred: AudioWorklet
       if(this.audioCtx.audioWorklet){
@@ -1130,11 +1131,11 @@ this._ridgeHold.set(
         // amplitude: small but increases with “visibility density”
         const area=this._triangleArea(tri);
         const vis=this._triangleVisibility(tri,[xmin,ymin,xmax,ymax]);
-        if(vis===0) continue;
+        const visW=vis ? 1 : 0.35;
         const screenW=this._screenCenterWeight(cx,cy);
         if(screenW<=0) continue;
         const focus=this._attentionGain(screenW);
-        const amp=Math.sqrt(area)*vis*levelWeight*focus;
+        const amp=Math.sqrt(area)*visW*levelWeight*focus;
         const ph=Math.atan2(cy-pivot[1],cx-pivot[0]); // spatial phase
 
         w.push(omega);
@@ -1143,9 +1144,14 @@ this._ridgeHold.set(
         if(w.length>=this._audioMaxOsc) break;
       }
 
+      // always-on bed to avoid total silence at macro zoom
+      w.push(TAU*110);
+      a.push(0.02);
+      p.push(0);
+
       // Normalize amplitude so sum doesn’t explode
       const n=w.length||1;
-      const norm=1/Math.sqrt(n);
+      const norm=Math.min(1,1/Math.sqrt(n));
       for(let i=0;i<a.length;i++) a[i]*=norm;
 
       const payload={w,a,p};
