@@ -16,7 +16,7 @@
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
     .app{height:100vh;width:100vw;overflow:hidden}
-    #mainLayout{display:grid;grid-template-rows:auto minmax(60vh,1fr) minmax(140px,220px) minmax(90px,120px);height:100vh;overflow:hidden;width:100vw}
+    #mainLayout{display:grid;grid-template-rows:auto minmax(65vh,1fr) minmax(120px,220px) minmax(90px,120px);height:100vh;overflow:hidden;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
     #controlsWrap{grid-row:1;display:flex;flex-direction:column;min-height:0}
     #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
@@ -75,9 +75,9 @@
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
-    #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:60vh;overflow:hidden;background:#000}
+    #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:65vh;overflow:hidden;background:#000}
     #hlsfCanvas{display:block;width:100%;height:100%}
-    #spectrogramPanel{overflow:hidden;min-height:140px;max-height:220px;height:clamp(140px,18vh,220px)}
+    #spectrogramPanel{overflow:hidden;min-height:120px;max-height:220px;height:clamp(120px,18vh,220px)}
     #spectrogramPanel canvas{width:100%;height:100%}
     #oscilloscopePanel{overflow:hidden;min-height:90px;max-height:120px;height:clamp(90px,12vh,120px)}
     .hlsf-overlay,
@@ -531,6 +531,7 @@ this._ridgeHold.set(
     constructor(){
       this.canvas=document.getElementById('hlsfCanvas');
       this.wrap=document.getElementById('hlsfPanel');
+      this.hlsfCanvasWrap=document.getElementById('hlsfCanvasWrap');
       this.ctx=this.canvas.getContext('2d');
       this.deferThreshold=400000;
       this.sidesInput=document.getElementById('sidesInput'); this.nMinus=document.getElementById('nMinus'); this.nPlus=document.getElementById('nPlus'); this.updateBtn=document.getElementById('updatePlot'); this.levelButtons=document.getElementById('levelButtons'); this.cancelBtn=document.getElementById('cancelGen');
@@ -826,9 +827,9 @@ this._ridgeHold.set(
       }
     }
     _applyPanelLayout(){
-      const hasSpectrogramSession=this.liveSpecEnabled||this._specReplayActive||Boolean(this._specFrames?.length);
-      const hasSpectrogram=this.audioEnabled&&this.specPanelVisible&&hasSpectrogramSession;
-      const hasOscilloscope=this.audioEnabled&&this.oscilloscopeVisible&&hasSpectrogramSession;
+      const hasSpectrogramSession=(this.liveSpecEnabled&&this.audioEnabled)||this._specReplayActive||Boolean(this._specFrames?.length);
+      const hasSpectrogram=this.specPanelVisible&&hasSpectrogramSession;
+      const hasOscilloscope=this.oscilloscopeVisible&&hasSpectrogramSession;
       this._updateAnalysisVisibility({hasSpectrogram,hasOscilloscope});
     }
     _applyVolumeFromSlider(){
@@ -1080,8 +1081,8 @@ this._ridgeHold.set(
 
     _resizeCanvas(){
       const dpr=Math.max(1,window.devicePixelRatio||1);
-      const w=Math.max(1,this.wrap.clientWidth|0);
-      const h=Math.max(1,this.wrap.clientHeight|0);
+      const w=this.hlsfCanvasWrap.clientWidth|0;
+      const h=this.hlsfCanvasWrap.clientHeight|0;
       this.canvas.width=(w*dpr)|0;
       this.canvas.height=(h*dpr)|0;
       this.canvas.style.width=`${w}px`;
