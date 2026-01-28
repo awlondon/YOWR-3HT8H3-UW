@@ -15,11 +15,14 @@
       --neutral:#374151; --neutral-h:#4b5563; --neutral-bd:#1f2937;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
-    .app{display:flex;flex-direction:column;height:100vh;width:100vw;overflow:hidden}
-    @supports(height:100dvh){.app{height:100dvh}}
-    .visual-stack{display:grid;grid-template-rows:160px 1fr 120px;height:calc(100vh - var(--header-height));min-height:0}
-    .app.spec-hidden .visual-stack{grid-template-rows:0px 1fr 120px}
-    .app.spec-hidden #spectrogramPanel{display:none}
+    .app{height:100vh;width:100vw;overflow:hidden}
+    #mainLayout{display:grid;grid-template-rows:auto auto minmax(0,1fr) 180px 120px;height:100vh;width:100vw}
+    @supports(height:100dvh){#mainLayout{height:100dvh}}
+    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(0,1fr) 0px 120px}
+    #mainLayout.audio-off{grid-template-rows:auto auto minmax(0,1fr) 0px 0px}
+    #mainLayout.spec-hidden #spectrogramPanel{display:none}
+    #mainLayout.audio-off #spectrogramPanel,
+    #mainLayout.audio-off #oscilloscopePanel{display:none}
     #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
@@ -74,6 +77,10 @@
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
+    #hlsfCanvasWrap{position:relative;width:100%;height:100%;overflow:hidden}
+    #hlsfCanvas{width:100%;height:100%}
+    #spectrogramPanel,
+    #oscilloscopePanel{overflow:hidden}
     .hlsf-overlay,
     .spectrogram-overlay,
     .debug-overlay{pointer-events:none}
@@ -95,14 +102,10 @@
     body.focus-mode footer{opacity:0.4;transition:opacity .2s ease}
     [data-focus-lock="true"]{transition:opacity .2s ease}
     body.focus-mode [data-focus-lock="true"]{opacity:0.35;pointer-events:none}
-    @media (max-width:1100px){
-      .visual-stack{grid-template-rows:160px 1fr 160px}
-      .app.spec-hidden .visual-stack{grid-template-rows:0px 1fr 160px}
-    }
   </style>
 </head>
 <body>
-<div class="app" id="appRoot">
+<div class="app" id="mainLayout">
   <div id="topBar">
     <header>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
@@ -137,7 +140,9 @@
         </div>
       </div>
     </header>
+  </div>
 
+  <div id="controlsPanel">
     <div class="controls">
       <div class="tab-bar">
         <button class="tab-btn" data-tab="geometry" aria-selected="true">Geometry</button>
@@ -267,9 +272,8 @@
       </div>
     </div>
     <input id="specFileInput" type="file" accept="application/json" style="display:none" />
-  </div>
 
-  <section class="guide" aria-label="Ridge tuning guide">
+    <section class="guide" aria-label="Ridge tuning guide">
       <details>
         <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
         <h4>1) Ridge selectivity (Top-K)</h4>
@@ -312,60 +316,61 @@ this._ridgeHold.set(
       </details>
     </section>
 
-  <section class="spec-controls-panel" aria-label="Spectrogram controls">
-    <div class="spec-header">
-      <div class="spec-controls">
-        <div class="spec-row">
-          <strong>Spectrogram</strong>
-          <span class="spec-meta" id="specInfo">No session loaded</span>
-          <button id="toggleSpecPanel" class="btn-neutral" style="margin-left:auto;">Hide Panel</button>
-        </div>
-        <div class="spec-row">
-          <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
-          <button id="specViewOmegaTime" class="btn-neutral" aria-pressed="false">ω–t</button>
-          <button id="specViewLevelTime" class="btn-neutral" aria-pressed="false">L–t</button>
-        </div>
-        <div class="spec-row">
-          <button id="specZoomOmegaIn">Zoom ω +</button>
-          <button id="specZoomOmegaOut">Zoom ω −</button>
-          <button id="specZoomLevelIn">Zoom L +</button>
-          <button id="specZoomLevelOut">Zoom L −</button>
-          <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
-        </div>
-        <div class="spec-row">
-          <button id="exportSpec" class="btn-neutral">Export Session</button>
-          <button id="importSpec" class="btn-neutral">Import Session</button>
-          <button id="replaySpec" class="btn-warning">Replay Session</button>
-        </div>
-        <div class="spec-row">
-          <label for="sliceBinInput">ω bin:</label>
-          <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
-          <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
+    <section class="spec-controls-panel" aria-label="Spectrogram controls">
+      <div class="spec-header">
+        <div class="spec-controls">
+          <div class="spec-row">
+            <strong>Spectrogram</strong>
+            <span class="spec-meta" id="specInfo">No session loaded</span>
+            <button id="toggleSpecPanel" class="btn-neutral" style="margin-left:auto;">Hide Panel</button>
+          </div>
+          <div class="spec-row">
+            <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
+            <button id="specViewOmegaTime" class="btn-neutral" aria-pressed="false">ω–t</button>
+            <button id="specViewLevelTime" class="btn-neutral" aria-pressed="false">L–t</button>
+          </div>
+          <div class="spec-row">
+            <button id="specZoomOmegaIn">Zoom ω +</button>
+            <button id="specZoomOmegaOut">Zoom ω −</button>
+            <button id="specZoomLevelIn">Zoom L +</button>
+            <button id="specZoomLevelOut">Zoom L −</button>
+            <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
+          </div>
+          <div class="spec-row">
+            <button id="exportSpec" class="btn-neutral">Export Session</button>
+            <button id="importSpec" class="btn-neutral">Import Session</button>
+            <button id="replaySpec" class="btn-warning">Replay Session</button>
+          </div>
+          <div class="spec-row">
+            <label for="sliceBinInput">ω bin:</label>
+            <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
+            <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <div class="visual-stack">
-    <div id="spectrogramPanel" class="panel panel-spec">
-      <canvas id="spectrogramCanvas"></canvas>
-      <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
-    </div>
+    <footer>
+      <div class="status" id="status">Ready</div>
+      <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>e</strong> export, <strong>i</strong> import, <strong>p</strong> replay, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
+    </footer>
+  </div>
 
-    <div id="hlsfPanel" class="panel panel-hlsf">
+  <div id="hlsfPanel" class="panel panel-hlsf">
+    <div id="hlsfCanvasWrap" class="canvas-wrap">
       <canvas id="hlsfCanvas" tabindex="0"></canvas>
-    </div>
-
-    <div id="waveformPanel" class="panel panel-wave">
-      <div class="scope-header">Oscilloscope</div>
-      <canvas id="waveCanvas"></canvas>
     </div>
   </div>
 
-  <footer>
-    <div class="status" id="status">Ready</div>
-    <div class="help">Mouse: drag to pan, wheel to zoom. Keys: arrows, <strong>r</strong> reset, <strong>e</strong> export, <strong>i</strong> import, <strong>p</strong> replay, <strong>,</strong>/<strong>.</strong> step Emergent.</div>
-  </footer>
+  <div id="spectrogramPanel" class="panel panel-spec">
+    <canvas id="spectrogramCanvas"></canvas>
+    <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
+  </div>
+
+  <div id="oscilloscopePanel" class="panel panel-wave">
+    <div class="scope-header">Oscilloscope</div>
+    <canvas id="waveCanvas"></canvas>
+  </div>
 </div>
 
 <script>
@@ -560,8 +565,9 @@ this._ridgeHold.set(
       this.modeIndicator=document.getElementById('modeIndicator');
       this.tabButtons=Array.from(document.querySelectorAll('[data-tab]'));
       this.tabPanels=Array.from(document.querySelectorAll('[data-tab-panel]'));
-      this.appRoot=document.getElementById('appRoot');
+      this.layoutRoot=document.getElementById('mainLayout');
       this.specPanel=document.getElementById('spectrogramPanel');
+      this.oscilloscopePanel=document.getElementById('oscilloscopePanel');
       this.specControls=document.querySelector('.spec-controls-panel');
       this.topBar=document.getElementById('topBar');
       this.guide=document.querySelector('.guide');
@@ -766,6 +772,21 @@ this._ridgeHold.set(
       }
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
+      this._applyPanelLayout();
+    }
+    _applyPanelLayout(){
+      const audioOff=!this.audioEnabled;
+      if(this.layoutRoot){
+        this.layoutRoot.classList.toggle('audio-off',audioOff);
+        this.layoutRoot.classList.toggle('spec-hidden',!this.specPanelVisible);
+      }
+      if(this.specPanel){
+        const showSpec=!audioOff&&this.specPanelVisible;
+        this.specPanel.style.display=showSpec?'block':'none';
+      }
+      if(this.oscilloscopePanel){
+        this.oscilloscopePanel.style.display=audioOff?'none':'block';
+      }
     }
     _sliderToGain(value){
       const minDb=-48;
@@ -1078,7 +1099,9 @@ this._ridgeHold.set(
       this.levels=L; this.gen.setLevels(L); this._popupShown=false;
       this.selectedLevel=L;
       if(this.levels===0){this.edgesOnly=true; this.whiteBg=true; this.alpha=0.34; this.toggleEdgesBtn.textContent="Show Colors"} else {this._autoAlphaIfColors()}
-      this._updatePlot(true); if(L>=3)this._viewPortal();
+      this._updatePlot(true);
+      this._resetView();
+      if(L>=3)this._viewPortal();
       this._updateButtonsEnabled(); this._markActiveLevel();
       this._updateSnapLabel();
       this._updateEntityLabel();
@@ -1632,12 +1655,10 @@ this._ridgeHold.set(
 
     _toggleSpecPanel(){
       this.specPanelVisible=!this.specPanelVisible;
-      if(this.appRoot){
-        this.appRoot.classList.toggle('spec-hidden',!this.specPanelVisible);
-      }
       if(this.toggleSpecPanelBtn){
         this.toggleSpecPanelBtn.textContent=this.specPanelVisible?'Hide Panel':'Show Panel';
       }
+      this._applyPanelLayout();
       this._handleLayoutChange();
     }
 
