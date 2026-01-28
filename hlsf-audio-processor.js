@@ -6,17 +6,23 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.phase = 0;
     this.table = new Float32Array(0);
     this.speed = 1;
-    this.gateThreshold = 0.02;
-    this.userVolume = 1;
-    this.minAudible = 0.0035;
+    this.freqHz = 110;
+    this.gateThreshold = 0.0025;
+    this.targetRms = 0.08;
+    this.maxGain = 2.5;
+    this.userVolume = 0.1;
+    this.minDenom = 1e-4;
+    this.useHP = false;
     this.hpPrevX = 0;
     this.hpPrevY = 0;
-    this.enabled = false;
+    this.enabled = true;
     this.monitorCounter = 0;
-    this.monitorRate = 128;
+    this.monitorRate = 8;
     this.monitorBuffer = new Float32Array(256);
     this.monitorWrite = 0;
     this.frameCount = 0;
+    this.metricsCounter = 0;
+    this.metricsRate = 8;
 
     this.port.onmessage = (e) => {
       const msg = e.data;
@@ -26,11 +32,18 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
           if (!(this.table instanceof Float32Array)) {
             this.table = Float32Array.from(this.table);
           }
+          if (this.table.length > 0 && msg.enabled == null) {
+            this.enabled = true;
+          }
         }
+        if (Number.isFinite(msg.freqHz)) this.freqHz = Math.max(1, msg.freqHz);
         if (Number.isFinite(msg.speed)) this.speed = msg.speed;
-        if (Number.isFinite(msg.gateThreshold)) this.gateThreshold = msg.gateThreshold;
-        if (Number.isFinite(msg.userVolume)) this.userVolume = msg.userVolume;
-        this.enabled = msg.enabled === true;
+        if (Number.isFinite(msg.gateThreshold)) this.gateThreshold = Math.max(0, msg.gateThreshold);
+        if (Number.isFinite(msg.targetRms)) this.targetRms = Math.max(0.001, msg.targetRms);
+        if (Number.isFinite(msg.maxGain)) this.maxGain = Math.max(0.1, msg.maxGain);
+        if (Number.isFinite(msg.userVolume)) this.userVolume = Math.max(0, msg.userVolume);
+        if (typeof msg.useHP === 'boolean') this.useHP = msg.useHP;
+        if (msg.enabled != null) this.enabled = msg.enabled === true;
       }
     };
   }
@@ -54,7 +67,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       type: 'monitor',
       wave: slice,
       rms,
-      gated: rms < this.minAudible
+      gated: rms < this.gateThreshold
     });
   }
 
@@ -68,18 +81,18 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       for (let i = 0; i < output.length; i++) {
         this._pushMonitorSample(0);
       }
-      this.monitorCounter++;
-      if (this.monitorCounter % this.monitorRate === 0) {
+      if ((++this.monitorCounter % this.monitorRate) === 0) {
         this._emitMonitorFrame();
       }
       return true;
     }
 
     let phase = this.phase;
-    const speed = this.speed;
     const hpA = 0.995;
     let prevX = this.hpPrevX;
     let prevY = this.hpPrevY;
+    const useHP = this.useHP;
+    const phaseInc = (this.freqHz * tableLen) / this.sampleRate;
 
     for (let i = 0; i < output.length; i++) {
       const idx = Math.floor(phase);
@@ -88,14 +101,16 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       const b = table[(idx + 1) % tableLen];
       let sample = a + (b - a) * frac;
 
-      const hp = sample - prevX + hpA * prevY;
-      prevX = sample;
-      prevY = hp;
-      sample = Math.tanh(hp);
+      if (useHP) {
+        const hp = sample - prevX + hpA * prevY;
+        prevX = sample;
+        prevY = hp;
+        sample = hp;
+      }
 
       output[i] = sample;
 
-      phase += speed;
+      phase += phaseInc;
       if (phase >= tableLen) phase -= tableLen * Math.floor(phase / tableLen);
     }
 
@@ -105,18 +120,43 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     }
 
     const rms = Math.sqrt(sumSq / output.length);
-    const minAudible = this.minAudible;
-    const gain = rms > 0 ? Math.max(rms, minAudible) : 0;
-    const finalGain = Math.min(1.0, gain * (this.userVolume ?? 0.08));
-    this.port.postMessage({
-      type: 'audio-metrics',
-      rms,
-      gain: finalGain,
-      audible: rms >= minAudible
-    });
+    if (rms < this.gateThreshold) {
+      output.fill(0);
+      for (let i = 0; i < output.length; i++) {
+        this._pushMonitorSample(0);
+      }
+      if ((++this.monitorCounter % this.monitorRate) === 0) {
+        this._emitMonitorFrame();
+      }
+      if ((++this.metricsCounter % this.metricsRate) === 0) {
+        this.port.postMessage({
+          type: 'audio-metrics',
+          rms,
+          gain: 0,
+          audible: false
+        });
+      }
+      this.phase = phase;
+      this.hpPrevX = prevX;
+      this.hpPrevY = prevY;
+      return true;
+    }
+
+    const denom = Math.max(rms, this.minDenom);
+    let gain = (this.targetRms / denom) * this.userVolume;
+    gain = Math.min(this.maxGain, Math.max(0, gain));
     for (let i = 0; i < output.length; i++) {
-      const sample = output[i] * finalGain;
+      const sample = output[i] * gain;
       output[i] = Math.max(-0.9, Math.min(0.9, sample));
+    }
+
+    if ((++this.metricsCounter % this.metricsRate) === 0) {
+      this.port.postMessage({
+        type: 'audio-metrics',
+        rms,
+        gain,
+        audible: true
+      });
     }
 
     this.frameCount++;
@@ -124,8 +164,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < output.length; i++) {
       this._pushMonitorSample(output[i]);
     }
-    this.monitorCounter++;
-    if (this.monitorCounter % this.monitorRate === 0) {
+    if ((++this.monitorCounter % this.monitorRate) === 0) {
       this._emitMonitorFrame();
     }
 
