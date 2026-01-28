@@ -551,6 +551,7 @@ this._ridgeHold.set(
       this.scopeRmsBuf=new Float32Array(256);
       this.scopeRmsWrite=0;
       this.scopeClipPeak=0;
+      this.audioMetrics={rms:0,gain:0,audible:false};
       this.specViewOmegaLevelBtn=document.getElementById('specViewOmegaLevel');
       this.specViewOmegaTimeBtn=document.getElementById('specViewOmegaTime');
       this.specViewLevelTimeBtn=document.getElementById('specViewLevelTime');
@@ -630,6 +631,7 @@ this._ridgeHold.set(
       this.audioEnabled=true;         // start enabled for default audio playback
       this.audio=new AudioEngine();
       this.audio.onMonitor=(event)=>this._handleMonitorFrame(event?.data);
+      this.audio.onMetrics=(event)=>this._handleAudioMetrics(event?.data);
       this._audioEveryMs=50;
       this._audioLastTs=0;
       this._audioWavetableSize=512;
@@ -1252,6 +1254,14 @@ this._ridgeHold.set(
       this.scopeClipPeak=clipPeak;
     }
 
+    _handleAudioMetrics(m){
+      if(!m || m.type !== 'audio-metrics') return;
+      if(!this.audioMetrics) return;
+      this.audioMetrics.rms=Number.isFinite(m.rms)?m.rms:0;
+      this.audioMetrics.gain=Number.isFinite(m.gain)?m.gain:0;
+      this.audioMetrics.audible=!!m.audible;
+    }
+
     _drawOscilloscope(){
       if(!this.scopeCanvas || !this.scopeCtx) return;
       const ctx=this.scopeCtx;
@@ -1322,6 +1332,27 @@ this._ridgeHold.set(
       );
       ctx.fillStyle='#888';
       ctx.fillText('RMS trace',8,rmsTop+14);
+    }
+
+    _drawAudioHUD(){
+      const ctx=this.ctx;
+      if(!ctx || !this.audioMetrics) return;
+      const x=12, y=48, lh=14;
+      const state=this.audio?.ctx?.state ?? 'suspended';
+      const stateLabel=state==="running" ? "Running" : "Suspended";
+      const entityK=(this.activeEntityK ?? this.entityIndex ?? 0);
+      ctx.save();
+      ctx.globalAlpha=0.9;
+      ctx.fillStyle=this.whiteBg ? '#000' : '#fff';
+      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText('Audio', x, y);
+      ctx.fillText(`RMS: ${this.audioMetrics.rms.toFixed(5)}`, x, y+lh);
+      ctx.fillText(`Gain: ${this.audioMetrics.gain.toFixed(4)}`, x, y+2*lh);
+      ctx.fillText(`Audible: ${this.audioMetrics.audible}`, x, y+3*lh);
+      ctx.fillText(`Zoom: ${this.scale.toFixed(2)}`, x, y+4*lh);
+      ctx.fillText(`k/L: ${entityK}/${this.levels}`, x, y+5*lh);
+      ctx.fillText(`Audio: ${stateLabel}`, x, y+6*lh);
+      ctx.restore();
     }
 
     _computeAudioWavetable(){
@@ -3111,6 +3142,7 @@ this._ridgeHold.set(
       this._drawLiveSpectrogramHUD();
       this._updateAudioTick();
       this._drawOscilloscope();
+      this._drawAudioHUD();
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
@@ -3287,6 +3319,7 @@ this._ridgeHold.set(
       this.gateThreshold=0.02;
       this.userVolume=0.08;
       this.onMonitor=null;
+      this.onMetrics=null;
     }
 
     async init(){
@@ -3299,7 +3332,14 @@ this._ridgeHold.set(
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
       node.connect(ctx.destination);
       node.port.onmessage=(event)=>{
-        if(this.onMonitor) this.onMonitor(event);
+        const type=event?.data?.type;
+        if(type==='monitor'){
+          if(this.onMonitor) this.onMonitor(event);
+          return;
+        }
+        if(type==='audio-metrics'){
+          if(this.onMetrics) this.onMetrics(event);
+        }
       };
       this.node=node;
       this.ready=true;
