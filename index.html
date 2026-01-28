@@ -591,11 +591,18 @@ this._ridgeHold.set(
       this._entityFFT=null;
       this._hudWarning=null;
       this.canvasFocused=false;
-      // --- Audio (continuous noise filterbank) ---
+      // --- Audio (view-updated wavetable) ---
       this.audioEnabled=true;         // start enabled for default audio playback
       this.audio=new AudioEngine();
-      this._audioEveryMs=60;
+      this._audioEveryMs=50;
       this._audioLastTs=0;
+      this._audioWavetableSize=512;
+      this._audioBaseSpeed=0.85;
+      this._audioSpeedGamma=1.2;
+      this._audioGateThreshold=0.02;
+      this._audioWavetable=null;
+      this._audioSpeed=1;
+      this._audioWavePhase=0;
       this._lastAudioMag=null;
 
       this.sidesInput.value=String(this.sides);
@@ -695,12 +702,14 @@ this._ridgeHold.set(
     }
     _refreshAudioParams(){
       if(!this.audioEnabled) return;
-      const mag=this._computeSpectrumForAudio({bins:64});
-      if(mag){
-        this._lastAudioMag=mag;
-        this.audio.updateFromMagnitude(mag);
-      } else if(this._lastAudioMag){
-        this.audio.updateFromMagnitude(this._lastAudioMag);
+      const params=this._computeAudioWavetable();
+      if(params){
+        this._audioWavetable=params.wavetable;
+        this._audioSpeed=params.speed;
+        this.audio.updateFromWavetable(params);
+      } else {
+        this._audioWavetable=null;
+        this.audio.updateFromWavetable({wavetable:new Float32Array(0),speed:this._audioSpeed});
       }
     }
     async _bootAudio(){
@@ -1152,10 +1161,22 @@ this._ridgeHold.set(
 
     _updateWaveformSamples(){
       if(!this.waveBuf) return;
-      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
-      const signal=this.computeEntityTimeSignal(k,{sampleCount:256});
-      if(!signal) return;
-      for(let i=0;i<signal.length;i++) this._pushWaveSample(signal[i]);
+      const table=this._audioWavetable;
+      if(!table || !table.length) return;
+      const len=table.length;
+      const speed=Math.max(0.001,this._audioSpeed||1);
+      let phase=this._audioWavePhase;
+      const sampleCount=256;
+      for(let i=0;i<sampleCount;i++){
+        const idx=Math.floor(phase);
+        const frac=phase-idx;
+        const a=table[idx%len];
+        const b=table[(idx+1)%len];
+        this._pushWaveSample(a+(b-a)*frac);
+        phase+=speed;
+        if(phase>=len) phase-=len*Math.floor(phase/len);
+      }
+      this._audioWavePhase=phase;
     }
 
     _drawWaveformPanel(){
@@ -1198,6 +1219,92 @@ this._ridgeHold.set(
       ctx.fillText('Waveform (audio time-series)',8,14);
     }
 
+    _computeAudioWavetable(){
+      const tris=this.gen.activeTriangles();
+      if(!tris||!tris.length) return null;
+
+      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
+      const view=this._worldViewRect();
+      const bounds=this._wedgeRadialBounds(k,view);
+      if(!bounds) return null;
+
+      const {r0,r1}=bounds;
+      const span=r1-r0;
+      if(!(span>1e-6)) return null;
+
+      const N=this._audioWavetableSize;
+      const signal=new Float32Array(N);
+      const dr=span/N;
+      const [xmin,ymin,xmax,ymax]=view;
+      const pivot=this.gen.activePivot();
+      const theta0=canonicalStartAngle(this.sides);
+      const dTheta=TAU/this.sides;
+      const a0=theta0+k*dTheta;
+      const a1=a0+dTheta;
+
+      let maxArea=0;
+      const samples=[];
+      for(const tri of tris){
+        const [cx,cy]=this._triangleCentroid(tri);
+        if(cx<xmin || cx>xmax || cy<ymin || cy>ymax) continue;
+        let ang=Math.atan2(cy-pivot[1],cx-pivot[0]);
+        if(ang<0) ang+=TAU;
+        if(!this._angleInWedge(ang,a0,a1)) continue;
+        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+        if(r<r0 || r>r1) continue;
+        const area=this._triangleArea(tri);
+        maxArea=Math.max(maxArea,area);
+        samples.push({r,area});
+      }
+
+      if(!samples.length) return null;
+      const areaNorm=maxArea>0?maxArea:1;
+      for(const {r,area} of samples){
+        const idx=Math.floor((r-r0)/dr);
+        if(idx<0||idx>=N) continue;
+        const weight=Math.sqrt(area/areaNorm);
+        signal[idx]+=weight;
+      }
+
+      let mean=0;
+      for(let i=0;i<N;i++) mean+=signal[i];
+      mean/=N;
+      let varSum=0;
+      for(let i=0;i<N;i++){
+        const d=signal[i]-mean;
+        varSum+=d*d;
+      }
+      const std=Math.sqrt(varSum/N);
+      if(!(std>1e-6)) return null;
+
+      const wavetable=new Float32Array(N);
+      for(let i=0;i<N;i++){
+        const v=(signal[i]-mean)/(std+1e-6);
+        wavetable[i]=clamp(v,-3,3)/3;
+      }
+
+      const [px,py]=pivot;
+      const cx=(xmin+xmax)/2;
+      const cy=(ymin+ymax)/2;
+      let ang=Math.atan2(cy-py,cx-px);
+      if(ang<0) ang+=TAU;
+      let aa0=a0;
+      let aa1=a1;
+      if(aa1<aa0) aa1+=TAU;
+      let angAdj=ang;
+      if(angAdj<aa0) angAdj+=TAU;
+      const cxNorm=clamp((angAdj-aa0)/(aa1-aa0),0,1);
+      const speed=this._audioBaseSpeed*Math.pow(2,this._audioSpeedGamma*(cxNorm-0.5));
+
+      return {
+        wavetable,
+        speed,
+        gain:1,
+        gateThreshold:this._audioGateThreshold,
+        enabled:true
+      };
+    }
+
     _computeSpectrumForAudio({bins=64}={}){
       const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
       const resolvedBins=this._ensureFftBins(bins*2,"Audio FFT");
@@ -1232,12 +1339,14 @@ this._ridgeHold.set(
       this._audioLastTs=now;
 
       if(this.audioEnabled){
-        const mag=this._computeSpectrumForAudio({bins:64});
-        if(mag){
-          this._lastAudioMag=mag;
-          this.audio.updateFromMagnitude(mag);
-        } else if(this._lastAudioMag){
-          this.audio.updateFromMagnitude(this._lastAudioMag);
+        const params=this._computeAudioWavetable();
+        if(params){
+          this._audioWavetable=params.wavetable;
+          this._audioSpeed=params.speed;
+          this.audio.updateFromWavetable(params);
+        } else {
+          this._audioWavetable=null;
+          this.audio.updateFromWavetable({wavetable:new Float32Array(0),speed:this._audioSpeed});
         }
       }
       this._updateWaveformSamples();
@@ -1524,6 +1633,86 @@ this._ridgeHold.set(
       return aa0<aa1
         ? (ang>=aa0&&ang<aa1)
         : (ang>=aa0||ang<aa1);
+    }
+    _angleInWedge(ang,a0,a1){
+      let aa0=a0%TAU;
+      let aa1=a1%TAU;
+      if(aa0<0) aa0+=TAU;
+      if(aa1<0) aa1+=TAU;
+      return aa0<aa1
+        ? (ang>=aa0&&ang<aa1)
+        : (ang>=aa0||ang<aa1);
+    }
+    _cross2d([ax,ay],[bx,by]){
+      return ax*by-ay*bx;
+    }
+    _raySegmentIntersection(p,dir,a,b){
+      const r=dir;
+      const s=[b[0]-a[0],b[1]-a[1]];
+      const rxs=this._cross2d(r,s);
+      if(Math.abs(rxs)<1e-9) return null;
+      const q_p=[a[0]-p[0],a[1]-p[1]];
+      const t=this._cross2d(q_p,s)/rxs;
+      const u=this._cross2d(q_p,r)/rxs;
+      if(t>=0 && u>=0 && u<=1){
+        return [p[0]+t*r[0],p[1]+t*r[1]];
+      }
+      return null;
+    }
+    _wedgeRadialBounds(k,view){
+      const [xmin,ymin,xmax,ymax]=view;
+      const pivot=this.gen.activePivot();
+      const [px,py]=pivot;
+      const n=this.sides;
+      const theta0=canonicalStartAngle(n);
+      const dTheta=TAU/n;
+      const kk=((k%n)+n)%n;
+      const a0=theta0+kk*dTheta;
+      const a1=a0+dTheta;
+      const candidates=[];
+      const addPoint=(x,y)=>{
+        if(!Number.isFinite(x) || !Number.isFinite(y)) return;
+        candidates.push(Math.hypot(x-px,y-py));
+      };
+
+      if(px>=xmin && px<=xmax && py>=ymin && py<=ymax) candidates.push(0);
+
+      const corners=[[xmin,ymin],[xmin,ymax],[xmax,ymin],[xmax,ymax]];
+      for(const [x,y] of corners){
+        let ang=Math.atan2(y-py,x-px);
+        if(ang<0) ang+=TAU;
+        if(this._angleInWedge(ang,a0,a1)) addPoint(x,y);
+      }
+
+      const closestX=clamp(px,xmin,xmax);
+      const closestY=clamp(py,ymin,ymax);
+      let cAng=Math.atan2(closestY-py,closestX-px);
+      if(cAng<0) cAng+=TAU;
+      if(this._angleInWedge(cAng,a0,a1)) addPoint(closestX,closestY);
+
+      const edges=[
+        [[xmin,ymin],[xmax,ymin]],
+        [[xmax,ymin],[xmax,ymax]],
+        [[xmax,ymax],[xmin,ymax]],
+        [[xmin,ymax],[xmin,ymin]]
+      ];
+      const dirs=[
+        [Math.cos(a0),Math.sin(a0)],
+        [Math.cos(a1),Math.sin(a1)]
+      ];
+      for(const dir of dirs){
+        for(const [a,b] of edges){
+          const hit=this._raySegmentIntersection(pivot,dir,a,b);
+          if(hit) addPoint(hit[0],hit[1]);
+        }
+      }
+
+      if(!candidates.length) return null;
+      let r0=Math.min(...candidates);
+      let r1=Math.max(...candidates);
+      if(!Number.isFinite(r0) || !Number.isFinite(r1)) return null;
+      if(r1<r0) [r0,r1]=[r1,r0];
+      return {r0:Math.max(0,r0),r1:Math.max(0,r1)};
     }
     _triangleCentroid(tri){
       return [
@@ -2990,12 +3179,10 @@ this._ridgeHold.set(
       this.ready=false;
       this.enabled=false;
 
-      this.minFreq=40;
-      this.freqStep=12;
-
-      this.lastMag=null;
-      this.lastFreqs=[];
-      this.lastAmps=[];
+      this.wavetable=new Float32Array(0);
+      this.speed=1;
+      this.gain=1;
+      this.gateThreshold=0.02;
     }
 
     async init(){
@@ -3011,8 +3198,10 @@ this._ridgeHold.set(
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
-        freqs:this.lastFreqs,
-        amps:this.lastAmps
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gain:this.gain,
+        gateThreshold:this.gateThreshold
       });
     }
 
@@ -3021,13 +3210,15 @@ this._ridgeHold.set(
       if(this.ctx.state==="suspended") await this.ctx.resume().catch(()=>{});
     }
 
-    _postParams({enabled,freqs,amps}){
+    _postParams({enabled,wavetable,speed,gain,gateThreshold}){
       if(!this.node) return;
       this.node.port.postMessage({
         type:'params',
         enabled,
-        freqs,
-        amps
+        wavetable,
+        speed,
+        gain,
+        gateThreshold
       });
     }
 
@@ -3036,53 +3227,40 @@ this._ridgeHold.set(
       this.enabled=!!on;
       this._postParams({
         enabled:this.enabled,
-        freqs:this.lastFreqs,
-        amps:this.lastAmps
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gain:this.gain,
+        gateThreshold:this.gateThreshold
       });
     }
 
-    updateFromMagnitude(mag){
-      if(!this.ctx || !this.node || !this.enabled){ this.lastMag=mag; return; }
-      if(!mag || !mag.length) return;
-
-      let mx=0;
-      const freqs=[];
-      const amps=[];
-
-      for(let i=1;i<mag.length;i++){
-        const v=Math.max(0,mag[i]);
-        if(v<0.01) continue;
-        mx=Math.max(mx,v);
-        freqs.push(this.minFreq + i*this.freqStep);
-        amps.push(v);
+    updateFromWavetable({wavetable,speed,gain=1,gateThreshold}={}){
+      if(wavetable){
+        this.wavetable=wavetable;
       }
+      if(Number.isFinite(speed)) this.speed=speed;
+      if(Number.isFinite(gain)) this.gain=gain;
+      if(Number.isFinite(gateThreshold)) this.gateThreshold=gateThreshold;
 
-      if(!amps.length){
-        this.lastFreqs=[];
-        this.lastAmps=[];
+      if(!this.ctx || !this.node || !this.enabled) return;
+      if(!this.wavetable || !this.wavetable.length){
         this._postParams({
           enabled:false,
-          freqs:[],
-          amps:[]
+          wavetable:new Float32Array(0),
+          speed:this.speed,
+          gain:this.gain,
+          gateThreshold:this.gateThreshold
         });
-        this.lastMag=mag;
         return;
       }
 
-      const denom=mx>0?mx:1;
-      for(let i=0;i<amps.length;i++){
-        amps[i]=amps[i]/denom;
-      }
-
-      this.lastFreqs=[...freqs];
-      this.lastAmps=[...amps];
       this._postParams({
         enabled:true,
-        freqs:this.lastFreqs,
-        amps:this.lastAmps
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gain:this.gain,
+        gateThreshold:this.gateThreshold
       });
-
-      this.lastMag=mag;
     }
   }
 
