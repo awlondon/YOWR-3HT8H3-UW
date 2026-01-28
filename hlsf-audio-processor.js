@@ -149,18 +149,18 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       return true;
     }
 
-    const baseGain = Math.min(1.0, Math.max(0.0, (this.userVolume ?? 0.2)));
-    const limit = 0.85;
-    let postSumSq = 0;
+    const targetRms = 0.08;
+    const norm = rms > 1e-6 ? (targetRms / rms) : 0.0;
+    const vol = Math.max(0, Math.min(1, this.userVolume ?? 0));
+    const volGain = vol * vol;
+    const maxBoost = 6.0;
+    const g = Math.min(maxBoost, norm) * volGain;
     for (let i = 0; i < output.length; i++) {
-      let s = output[i] * baseGain;
-      if (Math.abs(s) > limit) {
-        s = Math.tanh(s / limit) * limit;
-      }
+      let s = output[i] * g;
+      if (s > 0.9) s = 0.9;
+      else if (s < -0.9) s = -0.9;
       output[i] = s;
-      postSumSq += s * s;
     }
-    const postRms = Math.sqrt(postSumSq / output.length);
 
     this.frameCount++;
 
@@ -172,9 +172,9 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       this._emitMonitorFrame();
       this.port.postMessage({
         type: 'audio-metrics',
-        rms: postRms,
-        gain: baseGain,
-        audible: postRms >= threshold
+        rms,
+        gain: g,
+        audible: vol > 0 && rms > 1e-5
       });
     }
 

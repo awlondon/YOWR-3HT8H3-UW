@@ -225,7 +225,7 @@
             <button id="cycleLiveEntity" class="btn-neutral">Live Entity +</button>
             <div style="display:flex;align-items:center;gap:6px">
               <span class="status">Vol</span>
-              <input id="volumeSlider" type="range" min="0" max="100" value="25" style="width:110px" />
+              <input id="volumeSlider" type="range" min="0" max="1" step="0.01" value="0.15" style="width:110px" />
             </div>
           </div>
           <div class="row" style="margin-top:8px;">
@@ -543,7 +543,6 @@ this._ridgeHold.set(
       this.speedPlus=document.getElementById('speedPlus'); this.speedMinus=document.getElementById('speedMinus'); this.toggleRotationBtn=document.getElementById('toggleRotation'); this.toggleEmergentBtn=document.getElementById('toggleEmergent'); this.pauseEmergentBtn=document.getElementById('pauseEmergent');
       this.stepBackBtn=document.getElementById('stepBack'); this.stepForwardBtn=document.getElementById('stepForward');
       this.snapMode=0;
-      this.snapEnabled=false;
       this.toggleSnapBtn=document.getElementById('toggleSnap');
       this.stepBackBtn.addEventListener('click',()=>this._emergentStep(-1)); this.stepForwardBtn.addEventListener('click',()=>this._emergentStep(+1));
       this.zoomInBtn=document.getElementById('zoomIn'); this.zoomOutBtn=document.getElementById('zoomOut'); this.resetViewBtn=document.getElementById('resetView'); this.viewPortalBtn=document.getElementById('viewPortal');
@@ -601,9 +600,10 @@ this._ridgeHold.set(
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
       this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
       this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
+      this.rotationLocked=false;
       this.lockedAngle=0;
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
-      this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
+      this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500;
       this.activeEntityK=0;
       this.entityFocusActive=false;
       this.focusModeActive=false;
@@ -680,6 +680,8 @@ this._ridgeHold.set(
       this._audioSpeed=1;
       this._lastAudioMag=null;
       this._audioStatusHooked=false;
+      this._volumeSendRaf=null;
+      this._pendingVolume=null;
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -828,17 +830,17 @@ this._ridgeHold.set(
         this.oscilloscopePanel.style.display=audioOff?'none':'block';
       }
     }
-    _sliderToGain(value){
-      const minDb=-48;
-      const maxDb=-6;
-      const t=value/100;
-      const db=minDb+(maxDb-minDb)*t;
-      return Math.pow(10, db/20);
-    }
     _applyVolumeFromSlider(){
       if(!this.volumeSlider) return;
-      const gain=this._sliderToGain(Number(this.volumeSlider.value));
-      this.audio.setMasterGain(gain);
+      const raw=parseFloat(this.volumeSlider.value);
+      const volume=clamp(Number.isFinite(raw)?raw:0,0,1);
+      this._pendingVolume=volume;
+      if(this._volumeSendRaf) return;
+      this._volumeSendRaf=requestAnimationFrame(()=>{
+        this._volumeSendRaf=null;
+        const next=clamp(this._pendingVolume ?? volume,0,1);
+        this.audio.setUserVolume(next);
+      });
     }
     _refreshAudioParams(force=false){
       if(!this.audioEnabled && !force) return;
@@ -863,6 +865,15 @@ this._ridgeHold.set(
       this.audio.setEnabled(true);
       this._applyVolumeFromSlider();
       this._refreshAudioParams();
+      this._updateAudioStatus();
+    }
+    async _ensureAudioStarted(){
+      if(!this.audioEnabled) return;
+      await this._bootAudio();
+      if(this.audio?.ctx?.state!=='running'){
+        await this.audio.resume();
+      }
+      this.audio.setEnabled(true);
       this._updateAudioStatus();
     }
     async _toggleAudio(){
@@ -898,31 +909,19 @@ this._ridgeHold.set(
     }
 
     _bindEvents(){
-      const armAudio=async()=>{
-        if(!this.audioEnabled){
-          this.audioEnabled=true;
-          this._syncAudioUi();
-        }
-        await this._bootAudio();
-        if(this.audio?.ctx?.state!=='running'){
-          await this.audio.resume();
-        }
-        this.audio.setEnabled(true);
-        this._updateAudioStatus();
+      const kickAudio=()=>{
+        this._ensureAudioStarted();
+        window.removeEventListener('pointerdown',kickAudio,{capture:true});
       };
-      window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
-      window.addEventListener('keydown',armAudio,{once:true,passive:true});
+      window.addEventListener('pointerdown',kickAudio,{once:true,capture:true});
+      window.addEventListener('keydown',kickAudio,{once:true,capture:true});
       if(this.audioStatusBtn){
         this.audioStatusBtn.addEventListener('click',async()=>{
           if(!this.audioEnabled){
             this.audioEnabled=true;
             this._syncAudioUi();
           }
-          await this._bootAudio();
-          if(this.audio?.ctx?.state!=='running'){
-            await this.audio.resume();
-          }
-          this._updateAudioStatus();
+          await this._ensureAudioStarted();
         });
       }
       window.addEventListener('resize',()=>this._handleLayoutChange(),{passive:true});
@@ -960,7 +959,7 @@ this._ridgeHold.set(
       this.toggleEmergentBtn.addEventListener('click',()=>this._toggleEmergent());
       this.pauseEmergentBtn.addEventListener('click',()=>this._togglePauseEmergent());
       this.toggleSnapBtn.addEventListener('click',()=>{
-        this.snapEnabled=!this.snapEnabled;
+        this.snapMode=(this.snapMode+1)%3;
         this._updateSnapLabel();
         this._render();
       });
@@ -1164,12 +1163,10 @@ this._ridgeHold.set(
     _toggleEdges(){this.edgesOnly=!this.edgesOnly; if(this.edgesOnly){this.alpha=.5; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true}else{this.toggleEdgesBtn.textContent="Show Outlines"; this._autoAlpha(); this.whiteBg=false} this._applyBg(); this._updatePlot(true); this._updateButtonsEnabled()}
     _toggleColorMode(){if(this.edgesOnly){this.edgesOnly=false; this.toggleEdgesBtn.textContent="Show Outlines"; this.whiteBg=false; this._applyBg()} this.colorMode=(this.colorMode==='by_level')?'distinct':'by_level'; this._autoAlpha(); this._updatePlot(true)}
     _toggleRotation(){
-      if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
       if(this.rotationActive){this.rotationActive=false; this.toggleRotationBtn.textContent="Start Rotation"} else {this.rotationActive=true; this.emergentActive=false; this.emergentPaused=false; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent"; this.toggleRotationBtn.textContent="Stop Rotation"}
       this._updateModeIndicator();
     }
     _toggleEmergent(){
-      if(this.entityLockRotation){this._statusMsg("Rotation locked during entity view."); return}
       if(this.emergentActive){
         this.emergentActive=false; this.emergentPaused=false; this.snapMode=0; this.toggleEmergentBtn.textContent="Emergent Rotation"; this.pauseEmergentBtn.disabled=true; this.pauseEmergentBtn.textContent="Pause Emergent";
         this._specRecording=false;
@@ -1193,7 +1190,12 @@ this._ridgeHold.set(
       this.entityFocusActive=false;
       this._setFocusMode(false);
       this._stopEntityRevealTour();
-      this._zoomToDesignExtent();
+      const seed=this.gen.activeSeedTris();
+      if(this.gen.level_tris[this.levels]===null && seed?.length){
+        this._fitDeferredToView(seed,this.gen.activePivot());
+      } else {
+        this._zoomToDesignExtent();
+      }
       if(render) this._render();
       if(refreshAudio) this._refreshAudioParams();
       this._updateModeIndicator();
@@ -1910,7 +1912,15 @@ this._ridgeHold.set(
       this.overlayAlpha.textContent=cumulative.toFixed(3);
       if(cumulative>=0.9999){ if(!this.edgesOnly){this.edgesOnly=true; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true; this._applyBg()} this.toggleEdgesBtn.disabled=true } else { this.toggleEdgesBtn.disabled=false }
 
-      if(!wantDefer && options.resetView) this._zoomToDesignExtent();
+      if(options.resetView){
+        if(!wantDefer){
+          this._zoomToDesignExtent();
+        } else {
+          const seed=this.gen.activeSeedTris();
+          const pivot=this.gen.activePivot();
+          if(seed?.length) this._fitDeferredToView(seed,pivot);
+        }
+      }
       if(options.updateStatus){
         this._updateHeaderLabels();
         this._updateStatus();
@@ -1928,9 +1938,9 @@ this._ridgeHold.set(
       const rMin=this.radius*multiplier(L,n)*rf;
       return {rMin:Math.max(0,rMin), rMax:Math.max(rMin,rMax)};
     }
-    _triangleInEntity(tri,k){
+    _triangleInEntity(tri,k,pivotOverride=null){
       const n=this.sides;
-      const pivot=this.gen.activePivot();
+      const pivot=pivotOverride ?? this.gen.activePivot();
       const theta0=canonicalStartAngle(n);
       const dTheta=TAU/n;
 
@@ -2130,7 +2140,7 @@ this._ridgeHold.set(
       const pivot=this.gen.activePivot();
 
       for(const tri of tris){
-        if(!this._triangleInEntity(tri,k)) continue;
+        if(!this._triangleInEntity(tri,k,resolvedPivot)) continue;
 
         const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
         const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
@@ -2144,12 +2154,12 @@ this._ridgeHold.set(
 
       return signal;
     }
-    _computeEntitySignalFromTris(tris,k,bins=128){
+    _computeEntitySignalFromTris(tris,k,bins=128,{levels=null,pivot=null}={}){
       if(!tris||!tris.length) return null;
 
       const n=this.sides;
-      const L=this.levels;
-      const pivot=this.gen.activePivot();
+      const L=levels ?? this.levels;
+      const resolvedPivot=pivot ?? this.gen.activePivot();
 
       let rMin=this.radius;
       let rMax=rMin;
@@ -2169,12 +2179,12 @@ this._ridgeHold.set(
       const signal=new Float32Array(bins);
 
       for(const tri of tris){
-        if(!this._triangleInEntity(tri,k)) continue;
+        if(!this._triangleInEntity(tri,k,resolvedPivot)) continue;
 
         const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
         const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
 
-        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+        const r=Math.hypot(cx-resolvedPivot[0],cy-resolvedPivot[1]);
         const idx=Math.floor((r-rMin)/dr);
         if(idx>=0&&idx<bins) signal[idx]+=1;
       }
@@ -2182,16 +2192,16 @@ this._ridgeHold.set(
       return signal;
     }
     _computeEntitySpectrogram(k,{Lmin=1,Lmax=this.levels,bins=128}={}){
-      const originalLevels=this.levels;
       const spectra=[];
       const resolvedBins=this._ensureFftBins(bins,"ω–L");
+      const scratch=new HLSFGenerator(this.center,this.radius,this.sides,Lmax);
 
       for(let L=Lmin;L<=Lmax;L++){
-        this.levels=L;
-        this.gen.setLevels(L);
-        this.gen.computeLevels();
-
-        const signal=this._computeEntitySignal(k,resolvedBins);
+        scratch.setLevels(L);
+        scratch.computeLevels();
+        const tris=scratch.activeTriangles();
+        const pivot=scratch.activePivot();
+        const signal=this._computeEntitySignalFromTris(tris,k,resolvedBins,{levels:L,pivot});
         if(!signal){
           spectra.push(null);
           continue;
@@ -2200,10 +2210,6 @@ this._ridgeHold.set(
         const mag=this._fftMagnitude(signal);
         spectra.push(mag);
       }
-
-      this.levels=originalLevels;
-      this.gen.setLevels(originalLevels);
-      this.gen.computeLevels();
 
       return spectra;
     }
@@ -3197,7 +3203,6 @@ this._ridgeHold.set(
       this.liveSpecEntityK=kk;
       this.entityFocusActive=true;
       this._setFocusMode(true);
-      if(this.entityLockRotation) this._stopRotationsForEntity();
       this._updateEntityLabel();
       this._stopEntityRevealTour();
       this._updateModeIndicator();
@@ -3237,13 +3242,10 @@ this._ridgeHold.set(
       }
     }
     _toggleEntityLock(){
-      this.entityLockRotation=!this.entityLockRotation;
-      this.entityLockBtn.setAttribute('aria-pressed',String(this.entityLockRotation));
-      this.entityLockBtn.textContent=this.entityLockRotation?"Lock Rotation: ON":"Lock Rotation";
-      if(this.entityLockRotation){
-        this.lockedAngle=this.emergentActive ? this.emergentAngle : this.globalAngle;
-        this._stopRotationsForEntity();
-      }
+      this.rotationLocked=!this.rotationLocked;
+      this.lockedAngle=this.emergentActive ? this.emergentAngle : this.globalAngle;
+      this.entityLockBtn.setAttribute('aria-pressed',String(this.rotationLocked));
+      this.entityLockBtn.textContent=this.rotationLocked?"Lock Rotation: ON":"Lock Rotation";
     }
 
     _worldToScreen([x,y]){const sx=x*(200*this.scale)+this.tx, sy=-y*(200*this.scale)+this.ty; return[sx,sy]}
@@ -3267,9 +3269,7 @@ this._ridgeHold.set(
     _currentColorArray(allTris){const L=Math.max(0,this.levels|0), seed=this.gen.activeSeedTris(), seedCount=seed.length, R=(L===0)?1:this.sides, T=seedCount*R; if(this.edgesOnly||T===0) return new Array(allTris.length).fill(null); const a=this.alpha; if(this.colorMode==='by_level'){const arr=this._paletteByLevel(L,seedCount,a); return allTris.map((_,i)=>arr[i%arr.length])} else {const arr=this._paletteDistinct(seedCount,L,a,R); return allTris.map((_,i)=>arr[i%arr.length])}}
     _lineWidthPx(){return Math.max(.5,2/(this.levels+1))}
     _resolveSnapMode(){
-      if(!this.snapEnabled) return 0;
-      if(this.emergentActive || (this.levels%2===1)) return 2;
-      return (this.levels%2===0) ? 1 : 2;
+      return this.snapMode;
     }
     _updateSnapLabel(){
       const mode=this._resolveSnapMode();
@@ -3277,7 +3277,7 @@ this._ridgeHold.set(
       if(mode===1) label=`360/${this.sides}`;
       if(mode===2) label=`360/${2*this.sides}`;
       this.toggleSnapBtn.textContent=`Snap: ${label}`;
-      this.toggleSnapBtn.setAttribute('aria-pressed',String(this.snapEnabled));
+      this.toggleSnapBtn.setAttribute('aria-pressed',String(mode!==0));
     }
     _snapAngle(theta){
       const mode=this._resolveSnapMode();
@@ -3296,9 +3296,9 @@ this._ridgeHold.set(
       const L=Math.max(0,this.levels|0);
       let drew=false;
       if(this.emergentActive){
-        if(!this.emergentPaused && !this.entityLockRotation) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
-        if(this.entityLockRotation) this.emergentAngle=this.lockedAngle;
-        const angle=this._snapAngle(this.emergentAngle);
+        if(!this.emergentPaused && !this.rotationLocked) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        const angleRaw=this.emergentAngle;
+        const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
         if(this.gen.level_tris[L]===null){
           this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels.");
           this.emergentActive=false;
@@ -3327,22 +3327,22 @@ this._ridgeHold.set(
         }
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
-          if(!this.entityLockRotation) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
-          else this.globalAngle=this.lockedAngle;
-          const angle=this._snapAngle(this.globalAngle);
+          if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          const angleRaw=this.globalAngle;
+          const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
           if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
         } else {
-          if(!this.entityLockRotation) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
-          else this.globalAngle=this.lockedAngle;
-          const angle=this._snapAngle(this.globalAngle);
+          if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          const angleRaw=this.globalAngle;
+          const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
           drew=true;
         }
       } else {
         const base=this.gen.activeTriangles();
-        const lockedAngle=this.entityLockRotation ? this._snapAngle(this.lockedAngle) : 0;
+        const lockedAngle=this.rotationLocked ? this.lockedAngle : 0;
         if(base&&base.length){
           const allTris=lockedAngle ? rotateTrianglesAround(base,this.gen.activePivot(),lockedAngle) : base;
           const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
@@ -3364,6 +3364,23 @@ this._ridgeHold.set(
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
     _zoomToDesignExtent(){const tris=this.gen.activeTriangles(), ext=this._trianglesExtent(tris); if(!ext){this._centerCanvas();return} const [xmin,xmax,ymin,ymax]=ext, mx=(xmax-xmin)*.10, my=(ymax-ymin)*.10; this._zoomToRect([xmin-mx,ymin-my,xmax+mx,ymax+my])}
+    _fitDeferredToView(seed,pivot){
+      const ext=this._trianglesExtent(seed);
+      if(!ext){this._centerCanvas();return}
+      const [xmin,xmax,ymin,ymax]=ext;
+      const corners=[[xmin,ymin],[xmin,ymax],[xmax,ymin],[xmax,ymax]];
+      let bx0=Infinity,by0=Infinity,bx1=-Infinity,by1=-Infinity;
+      for(let i=0;i<this.sides;i++){
+        const ang=(TAU/this.sides)*i;
+        for(const c of corners){
+          const r=rotatePointAround(c,pivot,ang);
+          bx0=Math.min(bx0,r[0]); by0=Math.min(by0,r[1]);
+          bx1=Math.max(bx1,r[0]); by1=Math.max(by1,r[1]);
+        }
+      }
+      const mx=(bx1-bx0)*.10, my=(by1-by0)*.10;
+      this._zoomToRect([bx0-mx,by0-my,bx1+mx,by1+my]);
+    }
     _centerCanvas(){this.scale=1; this.tx=this.canvas.clientWidth/2; this.ty=this.canvas.clientHeight/2}
     _computeZoomTarget([xmin,ymin,xmax,ymax]){
       const wpx=this.canvas.clientWidth,hpx=this.canvas.clientHeight, ww=(xmax-xmin), wh=(ymax-ymin);
@@ -3539,7 +3556,7 @@ this._ridgeHold.set(
       this.wavetable=new Float32Array(0);
       this.speed=1;
       this.gateThreshold=0.02;
-      this.userVolume=1;
+      this.userVolume=0.15;
       this.onMonitor=null;
       this.onMetrics=null;
       this._beepTested=false;
@@ -3558,7 +3575,7 @@ this._ridgeHold.set(
       const analyser=ctx.createAnalyser();
       const masterGain=ctx.createGain();
       analyser.fftSize=1024;
-      masterGain.gain.value=0.05;
+      masterGain.gain.value=1;
       this.analyser=analyser;
       this.masterGain=masterGain;
       if(this.mode==='legacy'){
@@ -3686,8 +3703,24 @@ this._ridgeHold.set(
       if(this.masterGain){
         this.masterGain.gain.value=next;
       }
-      this.userVolume=1;
       if(this.mode==='legacy') return;
+      this._postParams({
+        enabled:this.enabled,
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume
+      });
+    }
+
+    setUserVolume(v){
+      if(!Number.isFinite(v)) return;
+      const next=clamp(v,0,1);
+      this.userVolume=next;
+      if(this.mode==='legacy'){
+        if(this.masterGain) this.masterGain.gain.value=next;
+        return;
+      }
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
