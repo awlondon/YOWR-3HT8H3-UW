@@ -772,6 +772,7 @@ this._ridgeHold.set(
       if(!this.audioEnabled) return;
       await this.audio.init();
       await this.audio.resume();
+      this.audio.runBeepTest();
       if(this.audio.analyser){
         this._td=new Float32Array(this.audio.analyser.fftSize);
       }
@@ -812,6 +813,15 @@ this._ridgeHold.set(
     }
 
     _bindEvents(){
+      const ensureAudioRunning = async () => {
+        if (!this.audio?.ctx) return;
+        if (this.audio.ctx.state !== 'running') {
+          await this.audio.ctx.resume();
+          console.log('AudioContext resumed:', this.audio.ctx.state);
+        }
+      };
+      window.addEventListener('pointerdown', ensureAudioRunning, { once: true });
+      window.addEventListener('keydown', ensureAudioRunning, { once: true });
       const armAudio=async()=>{
         if(!this.audioEnabled) return;
         await this._bootAudio();
@@ -3326,15 +3336,18 @@ this._ridgeHold.set(
       this.ctx=null;
       this.node=null;
       this.analyser=null;
+      this.masterGain=null;
+      this.monitorGain=null;
       this.ready=false;
       this.enabled=false;
 
       this.wavetable=new Float32Array(0);
       this.speed=1;
       this.gateThreshold=0.02;
-      this.userVolume=0.05;
+      this.userVolume=1;
       this.onMonitor=null;
       this.onMetrics=null;
+      this._beepTested=false;
     }
 
     async init(){
@@ -3346,9 +3359,16 @@ this._ridgeHold.set(
       await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
       const analyser=ctx.createAnalyser();
+      const masterGain=ctx.createGain();
+      const monitorGain=ctx.createGain();
       analyser.fftSize=2048;
-      node.connect(analyser);
-      analyser.connect(ctx.destination);
+      masterGain.gain.value=0.05;
+      monitorGain.gain.value=0;
+      node.connect(masterGain);
+      masterGain.connect(ctx.destination);
+      masterGain.connect(analyser);
+      analyser.connect(monitorGain);
+      monitorGain.connect(ctx.destination);
       node.port.onmessage=(event)=>{
         const type=event?.data?.type;
         if(type==='monitor'){
@@ -3361,6 +3381,8 @@ this._ridgeHold.set(
       };
       this.node=node;
       this.analyser=analyser;
+      this.masterGain=masterGain;
+      this.monitorGain=monitorGain;
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
@@ -3389,7 +3411,11 @@ this._ridgeHold.set(
     }
     setVolume(v){
       if(!Number.isFinite(v)) return;
-      this.userVolume=Math.max(0,v);
+      const next=Math.max(0,v);
+      if(this.masterGain){
+        this.masterGain.gain.value=next;
+      }
+      this.userVolume=1;
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
@@ -3437,6 +3463,19 @@ this._ridgeHold.set(
         gateThreshold:this.gateThreshold,
         userVolume:this.userVolume
       });
+    }
+
+    runBeepTest(){
+      if(this._beepTested || !this.ctx || !this.masterGain) return;
+      this._beepTested=true;
+      setTimeout(() => {
+        if(!this.ctx || !this.masterGain) return;
+        const osc=this.ctx.createOscillator();
+        osc.frequency.value=220;
+        osc.connect(this.masterGain);
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.2);
+      }, 500);
     }
   }
 
