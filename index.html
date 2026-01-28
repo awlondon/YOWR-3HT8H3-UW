@@ -2862,6 +2862,23 @@ this._ridgeHold.set(
       for(let i=1;i<mag.length;i++){
         mag[i]=Math.hypot(re[i],im[i]);
       }
+      if(mag.length>2){
+        const minBin=2;
+        const maxBin=Math.max(minBin,Math.min(mag.length-1,Math.floor(mag.length*0.25)));
+        for(let i=0;i<mag.length;i++){
+          if(i<minBin||i>maxBin){
+            mag[i]=0;
+          }
+        }
+        const exp=0.45;
+        for(let i=minBin;i<=maxBin;i++){
+          mag[i]=Math.pow(mag[i],exp);
+        }
+        for(let i=minBin;i<=maxBin;i++){
+          const tilt=1/Math.sqrt(i);
+          mag[i]*=tilt;
+        }
+      }
       return mag;
     }
     _drawEntityFFTOverlay(k){
