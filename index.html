@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PDCo HLSF Engine Visualizer (Web)</title>
   <style>
-    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; --header-height:260px; }
+    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; --header-height:260px; --hlsf-min:320px; --spec-height:180px; --scope-height:120px; }
     :root {
       --btn-fg:#e9e9e9; --btn-bg:#1c1c1c; --btn-bg-h:#242424; --btn-bd:#2a2a2a;
       --primary:#3aa5ff; --primary-h:#2e83cc; --primary-bd:#1f5e91;
@@ -16,10 +16,10 @@
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
     .app{height:100vh;width:100vw;overflow:hidden}
-    #mainLayout{display:grid;grid-template-rows:auto auto minmax(0,1fr) 180px 120px;height:100vh;width:100vw}
+    #mainLayout{display:grid;grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) var(--spec-height) var(--scope-height);height:100vh;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
-    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(0,1fr) 0px 120px}
-    #mainLayout.audio-off{grid-template-rows:auto auto minmax(0,1fr) 0px 0px}
+    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px var(--scope-height)}
+    #mainLayout.audio-off{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px 0px}
     #mainLayout.spec-hidden #spectrogramPanel{display:none}
     #mainLayout.audio-off #spectrogramPanel,
     #mainLayout.audio-off #oscilloscopePanel{display:none}
@@ -666,7 +666,8 @@ this._ridgeHold.set(
       this.canvasFocused=false;
       // --- Audio (view-updated wavetable) ---
       this.audioEnabled=true;         // start enabled for default audio playback
-      this.audio=new AudioEngine();
+      this.audioMode='legacy';
+      this.audio=new AudioEngine({mode:this.audioMode});
       this.audio.onMonitor=(event)=>this._handleMonitorFrame(event?.data);
       this.audio.onMetrics=(event)=>this._handleAudioMetrics(event?.data);
       this._audioEveryMs=50;
@@ -796,6 +797,21 @@ this._ridgeHold.set(
           label='Audio enabled';
         }
         this.audioStatusTextEl.textContent=label;
+      }
+    }
+    _updateAudioStatus(){
+      const ctxState=this.audio?.ctx?.state ?? 'suspended';
+      const running=ctxState==="running";
+      const enabled=this.audioEnabled;
+      const modeLabel=this.audioMode==="legacy" ? "Legacy" : "Worklet";
+      if(this.audioStatusBtn){
+        const label=enabled ? (running ? "🔊 Audio ON" : "🟡 Audio Armed") : "🔇 Audio OFF";
+        this.audioStatusBtn.textContent=label;
+        this.audioStatusBtn.style.background=enabled ? (running ? "#063" : "#664200") : "#400";
+      }
+      if(this.audioStatusTextEl){
+        const status=enabled ? (running ? "Audio enabled" : "Audio ready") : "Audio muted";
+        this.audioStatusTextEl.textContent=`${status} (${modeLabel})`;
       }
     }
     _applyPanelLayout(){
@@ -1113,17 +1129,33 @@ this._ridgeHold.set(
     _applySides(n){this.sides=n; this.gen.setSides(n); this._popupShown=false; this._updatePlot(true); this._autoAlphaIfColors(); this._updateButtonsEnabled(); this._updateEntityLabel()}
 
     setLevel(L){
-      this.levels=L; this.gen.setLevels(L); this._popupShown=false;
+      this._applyLevelChange(L);
+    }
+
+    _applyLevelChange(L){
+      this.levels=L;
+      this.gen.setLevels(L);
+      this._popupShown=false;
       this.selectedLevel=L;
-      if(this.levels===0){this.edgesOnly=true; this.whiteBg=true; this.alpha=0.34; this.toggleEdgesBtn.textContent="Show Colors"} else {this._autoAlphaIfColors()}
-      this._updatePlot(true);
-      this._resetView();
-      if(L>=3)this._viewPortal();
-      this._updateButtonsEnabled(); this._markActiveLevel();
+      if(this.levels===0){
+        this.edgesOnly=true;
+        this.whiteBg=true;
+        this.alpha=0.34;
+        this.toggleEdgesBtn.textContent="Show Colors";
+      } else {
+        this._autoAlphaIfColors();
+      }
+      this._updatePlot({recompute:true,render:false,refreshAudio:false,resetView:false,updateStatus:true});
+      this._resetView({render:false,refreshAudio:false});
+      if(L>=3) this._viewPortal({render:false,refreshAudio:false});
+      this._updateButtonsEnabled();
+      this._markActiveLevel();
       this._updateSnapLabel();
       this._updateEntityLabel();
+      if(this.audio?.resetPhase) this.audio.resetPhase();
       this._refreshAudioParams(true);
-      this._drawFrame(0);
+      this._render();
+      this._updateAudioStatus();
     }
 
     _applyAlpha(){const a=parseFloat(this.alphaInput.value); if(!isFinite(a)||a<0||a>1)return; this.alpha=a; this._updatePlot(true)}
@@ -1157,14 +1189,26 @@ this._ridgeHold.set(
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
     _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render(); this._refreshAudioParams()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._refreshAudioParams(); this._updateModeIndicator(); this._updateAudioStatus()}
-    _viewPortal(){
+    _resetView({render=true,refreshAudio=true}={}){
+      this.entityFocusActive=false;
+      this._setFocusMode(false);
+      this._stopEntityRevealTour();
+      this._zoomToDesignExtent();
+      if(render) this._render();
+      if(refreshAudio) this._refreshAudioParams();
+      this._updateModeIndicator();
+      this._updateAudioStatus();
+    }
+    _viewPortal({render=true,refreshAudio=true}={}){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
       this._stopEntityRevealTour();
       const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
       let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
       if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
-      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true); this._render(); this._refreshAudioParams(); this._updateModeIndicator();
+      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true);
+      if(render) this._render();
+      if(refreshAudio) this._refreshAudioParams();
+      this._updateModeIndicator();
     }
     _downloadPng(){
       try{
@@ -1841,7 +1885,17 @@ this._ridgeHold.set(
       const est=triCount*0.000033; if(est>3){this._popupShown=true; return window.confirm(`This configuration will generate ~${triCount} triangles and may take ~${est.toFixed(2)}s.\nContinue?`)} return true;
     }
 
-    _updatePlot(recompute=false){
+    _updatePlot(recomputeOrOptions=false,optionsArg={}){
+      const defaults={render:true,refreshAudio:true,resetView:true,updateStatus:true,recompute:false};
+      let options={...defaults};
+      let recompute=false;
+      if(typeof recomputeOrOptions==="object" && recomputeOrOptions){
+        options={...defaults,...recomputeOrOptions};
+        recompute=!!options.recompute;
+      } else {
+        recompute=!!recomputeOrOptions;
+        options={...defaults,...optionsArg};
+      }
       const estimated=this._estimateTriangles(this.sides,this.levels), wantDefer=estimated>this.deferThreshold&&(this._isPortalZoomed()||this.levels>=5);
       if(!wantDefer && !this._warnIfHeavy()) return;
       if(recompute) this.gen.computeLevels(wantDefer?{deferAtLevel:this.levels}:undefined);
@@ -1856,8 +1910,14 @@ this._ridgeHold.set(
       this.overlayAlpha.textContent=cumulative.toFixed(3);
       if(cumulative>=0.9999){ if(!this.edgesOnly){this.edgesOnly=true; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true; this._applyBg()} this.toggleEdgesBtn.disabled=true } else { this.toggleEdgesBtn.disabled=false }
 
-      if(!wantDefer) this._zoomToDesignExtent();
-      this._updateHeaderLabels(); this._updateStatus(); this._render(); this._refreshAudioParams(); this._updateAudioStatus();
+      if(!wantDefer && options.resetView) this._zoomToDesignExtent();
+      if(options.updateStatus){
+        this._updateHeaderLabels();
+        this._updateStatus();
+      }
+      if(options.render) this._render();
+      if(options.refreshAudio) this._refreshAudioParams();
+      if(options.refreshAudio || options.render) this._updateAudioStatus();
     }
 
     _entityRadiusBounds(){
@@ -3466,7 +3526,7 @@ this._ridgeHold.set(
   }
 
   class AudioEngine {
-    constructor(){
+    constructor({mode='worklet'}={}){
       this.ctx=null;
       this.node=null;
       this.analyser=null;
@@ -3474,6 +3534,7 @@ this._ridgeHold.set(
       this.monitorGain=null;
       this.ready=false;
       this.enabled=false;
+      this.mode=mode;
 
       this.wavetable=new Float32Array(0);
       this.speed=1;
@@ -3482,6 +3543,10 @@ this._ridgeHold.set(
       this.onMonitor=null;
       this.onMetrics=null;
       this._beepTested=false;
+      this.legacySource=null;
+      this.legacyBuffer=null;
+      this._legacyMonitorTimer=null;
+      this._legacyMonitorBuf=new Float32Array(256);
     }
 
     async init(){
@@ -3490,13 +3555,22 @@ this._ridgeHold.set(
       if(!Ctx) return;
       const ctx=new Ctx();
       this.ctx=ctx;
-      await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
-      const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
       const analyser=ctx.createAnalyser();
       const masterGain=ctx.createGain();
-      const monitorGain=ctx.createGain();
-      analyser.fftSize=2048;
+      analyser.fftSize=1024;
       masterGain.gain.value=0.05;
+      this.analyser=analyser;
+      this.masterGain=masterGain;
+      if(this.mode==='legacy'){
+        analyser.connect(masterGain);
+        masterGain.connect(ctx.destination);
+        this.ready=true;
+        this._startLegacyMonitor();
+        return;
+      }
+      await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
+      const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
+      const monitorGain=ctx.createGain();
       monitorGain.gain.value=0;
       node.connect(masterGain);
       masterGain.connect(ctx.destination);
@@ -3514,8 +3588,6 @@ this._ridgeHold.set(
         }
       };
       this.node=node;
-      this.analyser=analyser;
-      this.masterGain=masterGain;
       this.monitorGain=monitorGain;
       this.ready=true;
       this._postParams({
@@ -3543,6 +3615,71 @@ this._ridgeHold.set(
         userVolume
       });
     }
+    _startLegacyMonitor(){
+      if(this._legacyMonitorTimer || !this.analyser) return;
+      this._legacyMonitorTimer=setInterval(()=>this._emitLegacyMonitor(),80);
+    }
+    _stopLegacyMonitor(){
+      if(this._legacyMonitorTimer){
+        clearInterval(this._legacyMonitorTimer);
+        this._legacyMonitorTimer=null;
+      }
+    }
+    _emitLegacyMonitor(){
+      if(!this.analyser) return;
+      const buf=this._legacyMonitorBuf;
+      this.analyser.getFloatTimeDomainData(buf);
+      let sum=0;
+      let peak=0;
+      for(let i=0;i<buf.length;i++){
+        const v=buf[i];
+        sum+=v*v;
+        peak=Math.max(peak,Math.abs(v));
+      }
+      const rms=Math.sqrt(sum/buf.length);
+      if(this.onMonitor){
+        this.onMonitor({data:{type:'monitor',wave:buf.slice(),rms,gated:false,peak}});
+      }
+      if(this.onMetrics){
+        this.onMetrics({data:{type:'audio-metrics',rms,gain:1,audible:rms>0.0005}});
+      }
+    }
+    _startLegacySource(){
+      if(!this.ctx || !this.analyser || !this.masterGain) return;
+      if(!this.wavetable || !this.wavetable.length) return;
+      if(this.legacySource){
+        try{this.legacySource.stop();}catch{}
+        this.legacySource.disconnect();
+        this.legacySource=null;
+      }
+      const buffer=this.ctx.createBuffer(1,this.wavetable.length,this.ctx.sampleRate);
+      buffer.copyToChannel(this.wavetable,0);
+      const source=this.ctx.createBufferSource();
+      source.buffer=buffer;
+      source.loop=true;
+      source.playbackRate.value=Math.max(0.01,this.speed);
+      source.connect(this.analyser);
+      source.start();
+      this.legacySource=source;
+      this.legacyBuffer=buffer;
+    }
+    _stopLegacySource(){
+      if(this.legacySource){
+        try{this.legacySource.stop();}catch{}
+        this.legacySource.disconnect();
+        this.legacySource=null;
+      }
+    }
+    resetPhase(){
+      if(this.mode==='legacy'){
+        if(this.enabled){
+          this._startLegacySource();
+        }
+        return;
+      }
+      if(!this.node) return;
+      this.node.port.postMessage({type:'reset'});
+    }
     setMasterGain(v){
       if(!Number.isFinite(v)) return;
       const next=Math.max(0,v);
@@ -3550,6 +3687,7 @@ this._ridgeHold.set(
         this.masterGain.gain.value=next;
       }
       this.userVolume=1;
+      if(this.mode==='legacy') return;
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
@@ -3560,8 +3698,17 @@ this._ridgeHold.set(
     }
 
     setEnabled(on){
-      if(!this.ctx || !this.node) return;
+      if(!this.ctx) return;
       this.enabled=!!on;
+      if(this.mode==='legacy'){
+        if(!this.enabled){
+          this._stopLegacySource();
+        } else {
+          this._startLegacySource();
+        }
+        return;
+      }
+      if(!this.node) return;
       this._postParams({
         enabled:this.enabled,
         wavetable:this.wavetable,
@@ -3578,7 +3725,16 @@ this._ridgeHold.set(
       if(Number.isFinite(speed)) this.speed=speed;
       if(Number.isFinite(gateThreshold)) this.gateThreshold=gateThreshold;
 
-      if(!this.ctx || !this.node || !this.enabled) return;
+      if(!this.ctx || !this.enabled) return;
+      if(this.mode==='legacy'){
+        if(!this.wavetable || !this.wavetable.length){
+          this._stopLegacySource();
+          return;
+        }
+        this._startLegacySource();
+        return;
+      }
+      if(!this.node) return;
       if(!this.wavetable || !this.wavetable.length){
         this._postParams({
           enabled:false,
