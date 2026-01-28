@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PDCo HLSF Engine Visualizer (Web)</title>
   <style>
-    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; --header-height:260px; --hlsf-min:320px; --spec-height:180px; --scope-height:120px; }
+    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; --header-height:260px; --hlsf-min:300px; --spec-min:140px; --spec-max:240px; --scope-height:120px; }
     :root {
       --btn-fg:#e9e9e9; --btn-bg:#1c1c1c; --btn-bg-h:#242424; --btn-bd:#2a2a2a;
       --primary:#3aa5ff; --primary-h:#2e83cc; --primary-bd:#1f5e91;
@@ -16,9 +16,9 @@
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
     .app{height:100vh;width:100vw;overflow:hidden}
-    #mainLayout{display:grid;grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) var(--spec-height) var(--scope-height);height:100vh;width:100vw}
+    #mainLayout{display:grid;grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) auto auto;height:100vh;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
-    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px var(--scope-height)}
+    #mainLayout.spec-hidden{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px auto}
     #mainLayout.audio-off{grid-template-rows:auto auto minmax(var(--hlsf-min),1fr) 0px 0px}
     #mainLayout.spec-hidden #spectrogramPanel{display:none}
     #mainLayout.audio-off #spectrogramPanel,
@@ -81,10 +81,10 @@
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
-    #hlsfCanvasWrap{position:relative;width:100%;height:100%;overflow:hidden}
+    #hlsfCanvasWrap{position:relative;width:100%;height:100%;overflow:hidden;background:#000}
     #hlsfCanvas{width:100%;height:100%}
-    #spectrogramPanel,
-    #oscilloscopePanel{overflow:hidden}
+    #spectrogramPanel{overflow:hidden;min-height:var(--spec-min);max-height:var(--spec-max);height:clamp(var(--spec-min),18vh,var(--spec-max))}
+    #oscilloscopePanel{overflow:hidden;height:var(--scope-height)}
     .hlsf-overlay,
     .spectrogram-overlay,
     .debug-overlay{pointer-events:none}
@@ -818,16 +818,18 @@ this._ridgeHold.set(
     }
     _applyPanelLayout(){
       const audioOff=!this.audioEnabled;
+      const hasSpectrogramSession=this.liveSpecEnabled||this._specReplayActive||Boolean(this._specFrames?.length);
       if(this.layoutRoot){
         this.layoutRoot.classList.toggle('audio-off',audioOff);
-        this.layoutRoot.classList.toggle('spec-hidden',!this.specPanelVisible);
+        this.layoutRoot.classList.toggle('spec-hidden',!this.specPanelVisible||!hasSpectrogramSession||audioOff);
       }
       if(this.specPanel){
-        const showSpec=!audioOff&&this.specPanelVisible;
+        const showSpec=!audioOff&&this.specPanelVisible&&hasSpectrogramSession;
         this.specPanel.style.display=showSpec?'block':'none';
       }
       if(this.oscilloscopePanel){
-        this.oscilloscopePanel.style.display=audioOff?'none':'block';
+        const showScope=!audioOff&&hasSpectrogramSession;
+        this.oscilloscopePanel.style.display=showScope?'block':'none';
       }
     }
     _applyVolumeFromSlider(){
