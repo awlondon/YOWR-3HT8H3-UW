@@ -219,7 +219,7 @@ this._ridgeHold.set(
   </section>
 
   <div class="main" id="mainPanel">
-    <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas"></canvas></div>
+  <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas" tabindex="0"></canvas></div>
     <div id="specPanel" class="panel spectrogram">
       <div class="spec-header">
         <div class="spec-controls">
@@ -317,6 +317,53 @@ this._ridgeHold.set(
   function rotatePointAround(p,pivot,th){const[px,py]=p,[cx,cy]=pivot,dx=px-cx,dy=py-cy,ct=Math.cos(th),st=Math.sin(th);return[ct*dx-st*dy+cx,st*dx+ct*dy+cy]}
   function rotateTrianglesAround(tris,pivot,th){const out=new Array(tris.length);for(let t=0;t<tris.length;t++){const tri=tris[t];out[t]=[rotatePointAround(tri[0],pivot,th),rotatePointAround(tri[1],pivot,th),rotatePointAround(tri[2],pivot,th)]}return out}
   function trianglesCenters(tris){const c=new Array(tris.length);for(let i=0;i<tris.length;i++){const[a,b,d]=tris[i];c[i]=[(a[0]+b[0]+d[0])/3,(a[1]+b[1]+d[1])/3]}return c}
+  function polygonArea(poly){
+    let area=0;
+    for(let i=0;i<poly.length;i++){
+      const [x1,y1]=poly[i];
+      const [x2,y2]=poly[(i+1)%poly.length];
+      area+=x1*y2-x2*y1;
+    }
+    return Math.abs(area)/2;
+  }
+  function clipPolygonToRect(poly,[xmin,ymin,xmax,ymax]){
+    const edges=[
+      {inside:([x,y])=>x>=xmin, intersect:(a,b)=>[xmin, a[1]+(b[1]-a[1])*(xmin-a[0])/(b[0]-a[0]||1e-9)]},
+      {inside:([x,y])=>x<=xmax, intersect:(a,b)=>[xmax, a[1]+(b[1]-a[1])*(xmax-a[0])/(b[0]-a[0]||1e-9)]},
+      {inside:([x,y])=>y>=ymin, intersect:(a,b)=>[a[0]+(b[0]-a[0])*(ymin-a[1])/(b[1]-a[1]||1e-9), ymin]},
+      {inside:([x,y])=>y<=ymax, intersect:(a,b)=>[a[0]+(b[0]-a[0])*(ymax-a[1])/(b[1]-a[1]||1e-9), ymax]}
+    ];
+    let output=poly;
+    for(const edge of edges){
+      const input=output;
+      output=[];
+      if(!input.length) break;
+      let S=input[input.length-1];
+      for(const E of input){
+        const Ein=edge.inside(E);
+        const Sin=edge.inside(S);
+        if(Ein){
+          if(!Sin) output.push(edge.intersect(S,E));
+          output.push(E);
+        } else if(Sin){
+          output.push(edge.intersect(S,E));
+        }
+        S=E;
+      }
+    }
+    return output;
+  }
+  function triangleIntersectsRect(tri,rect){
+    const clipped=clipPolygonToRect(tri,rect);
+    return clipped.length>=3&&polygonArea(clipped)>0;
+  }
+  function triangleVisibleFraction(tri,rect){
+    const area=polygonArea(tri);
+    if(!(area>0)) return 0;
+    const clipped=clipPolygonToRect(tri,rect);
+    if(clipped.length<3) return 0;
+    return polygonArea(clipped)/area;
+  }
   function totalReplications(sides,levels){if(levels<=0)return 0;if(sides===1)return levels;return Math.floor((sides*(Math.pow(sides,levels)-1))/(sides-1))}
 
   class HLSFGenerator{
@@ -458,6 +505,14 @@ this._ridgeHold.set(
       this._entitySignal=null;
       this._entityFFT=null;
       this._hudWarning=null;
+      this.canvasFocused=false;
+      this.audioContext=null;
+      this.audioNode=null;
+      this.audioGainNode=null;
+      this.audioGain=0.08;
+      this.audioTime=0;
+      this.audioUserDisabled=false;
+      this._audioParams={omega:[],phi:[],amp:[]};
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -491,6 +546,12 @@ this._ridgeHold.set(
 
     _screenToWorld([sx,sy]){const x=(sx-this.tx)/(200*this.scale), y=-(sy-this.ty)/(200*this.scale); return[x,y]}
     _worldViewRect(){const w=this.canvas.clientWidth,h=this.canvas.clientHeight,p0=this._screenToWorld([0,0]),p1=this._screenToWorld([w,h]);return[Math.min(p0[0],p1[0]),Math.min(p0[1],p1[1]),Math.max(p0[0],p1[0]),Math.max(p0[1],p1[1])]}
+    getVisibleTriangles(){
+      const view=this._worldViewRect();
+      return this.gen.activeTriangles().filter(tri =>
+        triangleIntersectsRect(tri,view)
+      );
+    }
     _estimateTriangles(n,L){const t0=(n%2===0)?Math.floor(n/2):Math.floor(n/2)+1; if(L<=0) return t0; return t0*Math.pow(n,L)}
     _isPortalZoomed(){const [xmin,ymin,xmax,ymax]=this._worldViewRect(); return Math.hypot(xmax-xmin,ymax-ymin)<1.25 }
 
@@ -565,7 +626,13 @@ this._ridgeHold.set(
       }
       this.specFileInput.addEventListener('change',e=>this._handleSpecImportFile(e));
       this.downloadPngBtn.addEventListener('click',(e)=>{e.preventDefault();this._downloadPng()});
-      this.canvas.addEventListener('mousedown',e=>{this.dragging=true; this.dragMoved=false; this.dragStart=[e.clientX,e.clientY]});
+      this.canvas.addEventListener('mousedown',e=>{
+        this.canvas.focus({preventScroll:true});
+        this._requestAudioStart();
+        this.dragging=true;
+        this.dragMoved=false;
+        this.dragStart=[e.clientX,e.clientY];
+      });
       window.addEventListener('mousemove',e=>{
         if(!this.dragging)return;
         const dx=e.clientX-this.dragStart[0],dy=e.clientY-this.dragStart[1];
@@ -573,6 +640,18 @@ this._ridgeHold.set(
         this.tx+=dx; this.ty+=dy; this.dragStart=[e.clientX,e.clientY]; this._render();
       });
       window.addEventListener('mouseup',()=>{this.dragging=false});
+      this.canvas.addEventListener('focus',()=>{
+        this.canvasFocused=true;
+        this._requestAudioStart();
+      });
+      this.canvas.addEventListener('blur',()=>{
+        this.canvasFocused=false;
+        this._refreshAudioOutput();
+      });
+      window.addEventListener('blur',()=>{
+        this.canvasFocused=false;
+        this._refreshAudioOutput();
+      });
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
       if(this.specCanvas){
         this.specCanvas.addEventListener('mousemove',e=>this._updateSpectrogramReadout(e));
@@ -582,6 +661,7 @@ this._ridgeHold.set(
       window.addEventListener('keydown',e=>{
         const ae=document.activeElement,typing=ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable===true);
         if(!typing){
+          this._requestAudioStart();
           if(e.key==='['){this.focusEntity(--this.entityIndex); e.preventDefault(); return;}
           if(e.key===']'){this.focusEntity(++this.entityIndex); e.preventDefault(); return;}
           if(e.key.toLowerCase()==='f'){
@@ -595,6 +675,13 @@ this._ridgeHold.set(
               this._updateSpecInfo();
             }
             this._render();
+            return;
+          }
+          if(e.key.toLowerCase()==='m'){
+            this.audioUserDisabled=!this.audioUserDisabled;
+            const label=this.audioUserDisabled?"Audio muted":"Audio enabled";
+            this._statusMsg(label);
+            this._refreshAudioOutput();
             return;
           }
           if(e.key.toLowerCase()==='g'){
@@ -852,11 +939,91 @@ this._ridgeHold.set(
       this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
     }
 
+    _requestAudioStart(){
+      this._ensureAudioContext();
+      if(!this.audioContext) return;
+      if(this.audioContext.state==="suspended"){
+        this.audioContext.resume().catch(()=>{});
+      }
+      this._refreshAudioOutput();
+    }
+
+    _ensureAudioContext(){
+      if(this.audioContext) return;
+      const AudioCtx=window.AudioContext||window.webkitAudioContext;
+      if(!AudioCtx) return;
+      this.audioContext=new AudioCtx();
+      this.audioGainNode=this.audioContext.createGain();
+      this.audioGainNode.gain.value=0;
+      const processor=this.audioContext.createScriptProcessor(1024,0,1);
+      processor.onaudioprocess=(e)=>{
+        const output=e.outputBuffer.getChannelData(0);
+        const params=this._audioParams;
+        const sampleRate=this.audioContext.sampleRate||44100;
+        const gain=this._shouldAudioPlay()?this.audioGain:0;
+        if(!params||!params.omega.length||gain===0){
+          output.fill(0);
+          this.audioTime+=output.length/sampleRate;
+          return;
+        }
+        const {omega,phi,amp}=params;
+        let t=this.audioTime;
+        const dt=1/sampleRate;
+        for(let i=0;i<output.length;i++){
+          let sum=0;
+          for(let j=0;j<omega.length;j++){
+            sum+=amp[j]*Math.sin(omega[j]*t+phi[j]);
+          }
+          output[i]=sum*gain;
+          t+=dt;
+        }
+        this.audioTime=t;
+      };
+      processor.connect(this.audioGainNode);
+      this.audioGainNode.connect(this.audioContext.destination);
+      this.audioNode=processor;
+    }
+
+    _shouldAudioPlay(){
+      return this.canvasFocused&&!this.audioUserDisabled;
+    }
+
+    _refreshAudioOutput(){
+      if(!this.audioGainNode) return;
+      this.audioGainNode.gain.value=this._shouldAudioPlay()?this.audioGain:0;
+    }
+
+    _updateAudioParams(){
+      const tris=this.getVisibleTriangles();
+      const view=this._worldViewRect();
+      const pivot=this.gen.activePivot();
+      const bounds=this._entityRadiusBounds();
+      const lw=1/Math.max(1,this.levels);
+      const phaseOffset=this.emergentActive ? this.emergentAngle : this.globalAngle;
+      const omega=[];
+      const phi=[];
+      const amp=[];
+      for(const tri of tris){
+        const area=this._triangleArea(tri);
+        if(!(area>0)) continue;
+        const visibility=triangleVisibleFraction(tri,view);
+        if(!(visibility>0)) continue;
+        const [cx,cy]=this._triangleCentroid(tri);
+        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
+        omega.push(this._mapRadiusToOmega(r,{omegaMin:1,omegaMax:64,rMin:bounds.rMin,rMax:bounds.rMax}));
+        phi.push(phaseOffset+Math.atan2(cy-pivot[1],cx-pivot[0]));
+        amp.push(area*lw*visibility);
+      }
+      this._audioParams={omega,phi,amp};
+    }
+
     analysisTick(dtSec){
       this._ensureDemoMode();
       this._updateEntitySignal();
       this._updateFFT();
       this._updateOmegaLevelCache();
+      this._updateAudioParams();
+      this._refreshAudioOutput();
     }
 
     _ensureDemoMode(){
