@@ -15,8 +15,11 @@
       --neutral:#374151; --neutral-h:#4b5563; --neutral-bd:#1f2937;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
-    .app{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100%}
+    .app{display:grid;grid-template-rows:auto minmax(180px,28vh) minmax(0,1fr) 140px auto;height:100vh;width:100vw;overflow:hidden}
     @supports(height:100dvh){.app{height:100dvh}}
+    .app.spec-hidden{grid-template-rows:auto 0px minmax(0,1fr) 140px auto}
+    .app.spec-hidden #spectrogramPanel{display:none}
+    #topBar{position:relative;z-index:10;background:var(--panel);border-bottom:1px solid var(--border)}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
     footer{border-top:1px solid var(--border);border-bottom:none;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
     .controls{display:flex;flex-direction:column;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border)}
@@ -56,11 +59,10 @@
     .guide li{margin:4px 0}
     .guide code{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:12px;color:var(--accent)}
     .guide .note{color:var(--muted);font-size:12px}
-    .main{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,40%);gap:12px;min-height:0;padding:0 12px 12px;transition:grid-template-columns .2s ease}
-    body.audio-mode .main{grid-template-columns:minmax(0,1fr) minmax(360px,46%)}
-    .main.spec-hidden{grid-template-columns:minmax(0,1fr)}
-    .panel{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0;border-radius:16px 0 0 16px}
-    .spectrogram{min-width:320px;max-width:65vw;resize:horizontal;overflow:auto;background:#070a12}
+    .panel{background:var(--panel);display:flex;flex-direction:column;min-height:0}
+    #spectrogramPanel{position:relative;overflow:hidden;background:radial-gradient(ellipse at top, #0d1220, #05070c);border-bottom:1px solid #1a1a1a}
+    #hlsfPanel{background:#000}
+    #waveformPanel{background:#050505;border-top:1px solid #222;padding:6px 10px;display:flex;flex-direction:column}
     .spec-header{padding:12px;border-bottom:1px solid var(--border);background:#0b0f1a}
     .spec-controls{display:flex;flex-direction:column;gap:8px}
     .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -68,10 +70,11 @@
     .spec-body canvas{width:100%;height:100%}
     .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border)}
     .spec-meta{font-size:12px;color:var(--muted)}
-    .spec-hidden #specPanel{display:none;}
-    .scope-panel{border-top:1px solid var(--border);background:#000}
+    .spec-hidden #spectrogramPanel{display:none;}
     .scope-header{padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
-    .canvas-wrap{position:relative;background:#000;min-height:0} canvas{display:block;width:100%;height:100%}
+    .waveform-body{flex:1;min-height:0}
+    .waveform-body canvas{width:100%;height:100%;display:block}
+    .canvas-wrap{position:relative;background:#000;min-height:0;flex:1} canvas{display:block;width:100%;height:100%}
     .canvas-wrap::after{content:"";position:absolute;inset:0;pointer-events:none;background:
       radial-gradient(circle at center, rgba(108,204,255,0.35) 0 1px, transparent 1px),
       linear-gradient(to right, transparent 49.8%, rgba(108,204,255,0.12) 49.8%, rgba(108,204,255,0.12) 50.2%, transparent 50.2%),
@@ -86,39 +89,38 @@
     [data-focus-lock="true"]{transition:opacity .2s ease}
     body.focus-mode [data-focus-lock="true"]{opacity:0.35;pointer-events:none}
     @media (max-width:1100px){
-      .main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(260px,38vh)}
-      body.audio-mode .main{grid-template-rows:minmax(0,1fr) minmax(320px,45vh)}
-      .panel{border-left:none;border-top:1px solid var(--border);border-radius:16px 16px 0 0}
-      .spectrogram{max-width:none;min-width:0;resize:none}
+      .app{grid-template-rows:auto minmax(160px,32vh) minmax(0,1fr) 160px auto}
+      .app.spec-hidden{grid-template-rows:auto 0px minmax(0,1fr) 160px auto}
     }
   </style>
 </head>
 <body>
-<div class="app">
-  <header>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-      <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
-      <div class="code-stack">
-        <div class="code-label" id="codeLabel">—</div>
-        <details class="meta-details">
-          <summary>Diagnostics</summary>
-          <div class="meta-popover">
-            <div class="code-label" id="graphStats">nodes: — | adj: —</div>
-          </div>
-        </details>
+<div class="app" id="appRoot">
+  <div id="topBar">
+    <header>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div><strong>PDCo HLSF Engine Visualizer</strong> — Web Port</div>
+        <div class="code-stack">
+          <div class="code-label" id="codeLabel">—</div>
+          <details class="meta-details">
+            <summary>Diagnostics</summary>
+            <div class="meta-popover">
+              <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+            </div>
+          </details>
+        </div>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <div class="controls">
-    <div class="tab-bar">
-      <button class="tab-btn" data-tab="geometry" aria-selected="true">Geometry</button>
-      <button class="tab-btn" data-tab="motion" aria-selected="false">Motion</button>
-      <button class="tab-btn" data-tab="audio" aria-selected="false">Audio</button>
-      <button class="tab-btn" data-tab="view" aria-selected="false">View</button>
-      <div class="mode-indicator" id="modeIndicator">Mode: Explore</div>
-    </div>
-    <div class="tab-panels">
+    <div class="controls">
+      <div class="tab-bar">
+        <button class="tab-btn" data-tab="geometry" aria-selected="true">Geometry</button>
+        <button class="tab-btn" data-tab="motion" aria-selected="false">Motion</button>
+        <button class="tab-btn" data-tab="audio" aria-selected="false">Audio</button>
+        <button class="tab-btn" data-tab="view" aria-selected="false">View</button>
+        <div class="mode-indicator" id="modeIndicator">Mode: Explore</div>
+      </div>
+      <div class="tab-panels">
       <div class="tab-panel active" id="tab-geometry" data-tab-panel="geometry">
         <div class="group" style="grid-column: span 6;" data-focus-lock="true">
           <h3>Dimension & Level</h3>
@@ -235,51 +237,50 @@
   </div>
 
   <section class="guide" aria-label="Ridge tuning guide">
-    <details>
-      <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
-      <h4>1) Ridge selectivity (Top-K)</h4>
-      <ul>
-        <li><code>this._ridgeTopK = 2</code> → very tonal, sparse</li>
-        <li><code>this._ridgeTopK = 3</code> → balanced (recommended)</li>
-        <li><code>this._ridgeTopK = 5</code> → dense, chord-like</li>
-      </ul>
-      <div class="note">Rule: low sides / low levels → smaller K. High sides / emergent rotation → larger K.</div>
+      <details>
+        <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
+        <h4>1) Ridge selectivity (Top-K)</h4>
+        <ul>
+          <li><code>this._ridgeTopK = 2</code> → very tonal, sparse</li>
+          <li><code>this._ridgeTopK = 3</code> → balanced (recommended)</li>
+          <li><code>this._ridgeTopK = 5</code> → dense, chord-like</li>
+        </ul>
+        <div class="note">Rule: low sides / low levels → smaller K. High sides / emergent rotation → larger K.</div>
 
-      <h4>2) Persistence (decay)</h4>
-      <ul>
-        <li><code>this._ridgeDecay = 0.90</code> → fast fade (percussive)</li>
-        <li><code>this._ridgeDecay = 0.94</code> → musical sustain</li>
-        <li><code>this._ridgeDecay = 0.97</code> → drone / structural memory</li>
-      </ul>
-      <div class="note">Interpretation: &lt; 0.9 = noisy, 0.97 = everything sticks forever. Sweet spot: 0.92–0.95.</div>
+        <h4>2) Persistence (decay)</h4>
+        <ul>
+          <li><code>this._ridgeDecay = 0.90</code> → fast fade (percussive)</li>
+          <li><code>this._ridgeDecay = 0.94</code> → musical sustain</li>
+          <li><code>this._ridgeDecay = 0.97</code> → drone / structural memory</li>
+        </ul>
+        <div class="note">Interpretation: &lt; 0.9 = noisy, 0.97 = everything sticks forever. Sweet spot: 0.92–0.95.</div>
 
-      <h4>3) Reinforcement strength</h4>
-      <ul>
-        <li><code>this._ridgeBoost = 0.25</code> → conservative</li>
-        <li><code>this._ridgeBoost = 0.35</code> → default</li>
-        <li><code>this._ridgeBoost = 0.50</code> → aggressive locking</li>
-      </ul>
-      <div class="note">If ridges “snap” too hard → lower boost. If ridges never form → raise boost.</div>
+        <h4>3) Reinforcement strength</h4>
+        <ul>
+          <li><code>this._ridgeBoost = 0.25</code> → conservative</li>
+          <li><code>this._ridgeBoost = 0.35</code> → default</li>
+          <li><code>this._ridgeBoost = 0.50</code> → aggressive locking</li>
+        </ul>
+        <div class="note">If ridges “snap” too hard → lower boost. If ridges never form → raise boost.</div>
 
-      <h4>4) Optional: frequency-weighted bias (recommended)</h4>
-      <p class="note">Higher ω bins are noisier. Bias against them so low/mid harmonics dominate naturally.</p>
-      <pre class="code-label">const weight = 1 - (bin / mag.length);
+        <h4>4) Optional: frequency-weighted bias (recommended)</h4>
+        <p class="note">Higher ω bins are noisier. Bias against them so low/mid harmonics dominate naturally.</p>
+        <pre class="code-label">const weight = 1 - (bin / mag.length);
 this._ridgeHold.set(
   bin,
   Math.min(1, cur + val * weight * this._ridgeBoost)
 );</pre>
 
-      <h4>5) Visual encoding (small but important)</h4>
-      <p class="note">Instead of pure white, use blue-white ridges for dark mode:</p>
-      <pre class="code-label">ctx.strokeStyle = this.whiteBg
+        <h4>5) Visual encoding (small but important)</h4>
+        <p class="note">Instead of pure white, use blue-white ridges for dark mode:</p>
+        <pre class="code-label">ctx.strokeStyle = this.whiteBg
   ? `rgba(0,0,0,${alpha})`
   : `rgba(180,220,255,${alpha})`;</pre>
-    </details>
-  </section>
+      </details>
+    </section>
+  </div>
 
-  <div class="main" id="mainPanel">
-  <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas" tabindex="0"></canvas></div>
-    <div id="specPanel" class="panel spectrogram">
+  <section id="spectrogramPanel" class="panel">
       <div class="spec-header">
         <div class="spec-controls">
           <div class="spec-row">
@@ -311,16 +312,22 @@ this._ridgeHold.set(
           </div>
         </div>
       </div>
-      <div class="spec-body">
+      <div class="spec-body" id="specBody">
         <canvas id="specCanvas" width="1024" height="512"></canvas>
         <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
       </div>
-      <div class="scope-panel">
-        <div class="scope-header">Oscilloscope</div>
-        <canvas id="scopeCanvas" style="width:100%;height:160px;"></canvas>
-      </div>
+    </section>
+
+  <section id="hlsfPanel" class="panel">
+    <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas" tabindex="0"></canvas></div>
+  </section>
+
+  <section id="waveformPanel" class="panel">
+    <div class="scope-header">Oscilloscope</div>
+    <div class="waveform-body">
+      <canvas id="scopeCanvas"></canvas>
     </div>
-  </div>
+  </section>
 
   <footer>
     <div class="status" id="status">Ready</div>
@@ -512,8 +519,9 @@ this._ridgeHold.set(
       this.modeIndicator=document.getElementById('modeIndicator');
       this.tabButtons=Array.from(document.querySelectorAll('[data-tab]'));
       this.tabPanels=Array.from(document.querySelectorAll('[data-tab-panel]'));
-      this.mainPanel=document.getElementById('mainPanel');
-      this.specPanel=document.getElementById('specPanel');
+      this.appRoot=document.getElementById('appRoot');
+      this.specPanel=document.getElementById('spectrogramPanel');
+      this.specBody=document.getElementById('specBody');
       this.specCanvas=document.getElementById('specCanvas');
       this.specCtx=this.specCanvas?this.specCanvas.getContext('2d'):null;
       this.specReadout=document.getElementById('specReadout');
@@ -623,7 +631,7 @@ this._ridgeHold.set(
         this.specCanvas.height=512;
       }
 
-      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._resizeCanvas();
+      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._handleLayoutChange();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
@@ -677,6 +685,7 @@ this._ridgeHold.set(
       this.tabPanels.forEach(panel=>{
         panel.classList.toggle('active',panel.dataset.tabPanel===tabName);
       });
+      this._handleLayoutChange();
     }
     _setFocusMode(active){
       this.focusModeActive=active;
@@ -739,6 +748,7 @@ this._ridgeHold.set(
       const label=this.audioEnabled?"Audio enabled":"Audio muted";
       this._statusMsg(label);
       this._syncAudioUi();
+      this._handleLayoutChange();
     }
     _toggleLiveFft(){
       this.liveSpecEnabled=!this.liveSpecEnabled;
@@ -752,6 +762,7 @@ this._ridgeHold.set(
       }
       this._render();
       this._syncAudioUi();
+      this._handleLayoutChange();
     }
     _cycleLiveEntity(){
       this.liveSpecEntityK=(this.liveSpecEntityK+1)%this.sides;
@@ -766,7 +777,7 @@ this._ridgeHold.set(
       };
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
-      window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
+      window.addEventListener('resize',()=>this._handleLayoutChange(),{passive:true});
       this.nMinus.addEventListener('click',()=>this._bumpSides(-1));
       this.nPlus.addEventListener('click',()=>this._bumpSides(+1));
       this.updateBtn.addEventListener('click',()=>this._applySidesFromInput());
@@ -909,19 +920,51 @@ this._ridgeHold.set(
     }
 
     _resizeCanvas(){
-      const dpr=Math.max(1,window.devicePixelRatio||1), w=this.wrap.clientWidth||window.innerWidth, footer=document.querySelector('footer'), fh=footer?footer.getBoundingClientRect().height:0, h=(window.innerHeight-this.wrap.getBoundingClientRect().top-fh)|0;
-      this.canvas.width=Math.max(1,(w*dpr)|0); this.canvas.height=Math.max(1,(h*dpr)|0);
-      this.canvas.style.width=w+'px'; this.canvas.style.height=h+'px';
-      this.ctx.setTransform(1,0,0,1,0,0); this.ctx.scale(dpr,dpr);
-      if(this.scopeCanvas && this.scopeCtx){
-        const scopeDpr=Math.max(1,window.devicePixelRatio||1);
-        const scopeW=this.scopeCanvas.clientWidth||600;
-        const scopeH=this.scopeCanvas.clientHeight||160;
-        this.scopeCanvas.width=(scopeW*scopeDpr)|0;
-        this.scopeCanvas.height=(scopeH*scopeDpr)|0;
-        this.scopeCtx.setTransform(1,0,0,1,0,0);
-        this.scopeCtx.scale(scopeDpr,scopeDpr);
+      const dpr=Math.max(1,window.devicePixelRatio||1);
+      const rect=this.wrap.getBoundingClientRect();
+      const w=Math.max(1,rect.width);
+      const h=Math.max(1,rect.height);
+      this.canvas.width=Math.max(1,(w*dpr)|0);
+      this.canvas.height=Math.max(1,(h*dpr)|0);
+      this.canvas.style.width=`${w}px`;
+      this.canvas.style.height=`${h}px`;
+      this.ctx.setTransform(1,0,0,1,0,0);
+      this.ctx.scale(dpr,dpr);
+    }
+
+    _resizeSpectrogram(){
+      if(!this.specCanvas || !this.specBody) return;
+      const rect=this.specBody.getBoundingClientRect();
+      const dpr=Math.max(1,window.devicePixelRatio||1);
+      const w=Math.max(1,rect.width);
+      const h=Math.max(1,rect.height);
+      this.specCanvas.width=Math.max(1,(w*dpr)|0);
+      this.specCanvas.height=Math.max(1,(h*dpr)|0);
+      this.specCanvas.style.width=`${w}px`;
+      this.specCanvas.style.height=`${h}px`;
+      if(this.specCtx){
+        this.specCtx.setTransform(1,0,0,1,0,0);
+        this.specCtx.scale(dpr,dpr);
       }
+    }
+
+    _resizeScope(){
+      if(!this.scopeCanvas || !this.scopeCtx) return;
+      const rect=this.scopeCanvas.getBoundingClientRect();
+      const dpr=Math.max(1,window.devicePixelRatio||1);
+      const w=Math.max(1,rect.width);
+      const h=Math.max(1,rect.height);
+      this.scopeCanvas.width=Math.max(1,(w*dpr)|0);
+      this.scopeCanvas.height=Math.max(1,(h*dpr)|0);
+      this.scopeCtx.setTransform(1,0,0,1,0,0);
+      this.scopeCtx.scale(dpr,dpr);
+    }
+
+    _handleLayoutChange(){
+      this._resizeCanvas();
+      this._resizeSpectrogram();
+      this._resizeScope();
+      this._render();
     }
 
     _bumpSides(d){const cur=parseInt(this.sidesInput.value||this.sides,10), n=Math.max(4,cur+d); this.sidesInput.value=String(n); this._applySides(n)}
@@ -1453,14 +1496,13 @@ this._ridgeHold.set(
 
     _toggleSpecPanel(){
       this.specPanelVisible=!this.specPanelVisible;
-      if(this.mainPanel){
-        this.mainPanel.classList.toggle('spec-hidden',!this.specPanelVisible);
+      if(this.appRoot){
+        this.appRoot.classList.toggle('spec-hidden',!this.specPanelVisible);
       }
       if(this.toggleSpecPanelBtn){
         this.toggleSpecPanelBtn.textContent=this.specPanelVisible?'Hide Panel':'Show Panel';
       }
-      this._resizeCanvas();
-      this._render();
+      this._handleLayoutChange();
     }
 
     _setSpectrogramView(view){
