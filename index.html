@@ -1868,18 +1868,10 @@ this._ridgeHold.set(
       }
     }
 
-    _normalizeFftBins(mag){
-      const normalized=new Float32Array(mag.length);
-      for(let i=1;i<mag.length;i++){
-        normalized[i]=dbToNorm(magToDb(mag[i]));
-      }
-      return normalized;
-    }
-
     _collectFftSlices(){
       const slices=[];
       if(this._entityFFT?.length){
-        slices.push({label:'Entity', data:this._normalizeFftBins(this._entityFFT)});
+        slices.push({label:'Entity', data:this._entityFFT});
       }
       const liveRows=this._liveSpecBuf?.length ?? 0;
       if((this.liveSpecEnabled || this._specReplayActive) && liveRows){
@@ -1927,20 +1919,64 @@ this._ridgeHold.set(
         return;
       }
       const data=slice.data;
-      const bins=data.length-1;
-      const barW=w/Math.max(1,bins);
-      for(let i=1;i<data.length;i++){
-        const value=clamp(data[i],0,1);
-        if(value<=0) continue;
-        const intensity=Math.pow(value,0.85);
-        const [r,g,b]=_specColorRgb(intensity);
-        ctx.fillStyle=`rgb(${r},${g},${b})`;
-        const x=(i-1)*barW;
-        const barH=value*h;
-        ctx.fillRect(x,h-barH,Math.max(1,barW),barH);
+      const fftLength=data.length;
+      const targetBins=Math.max(1,fftLength-1);
+      const logMap=this._getFftLogMap(fftLength,targetBins);
+      let sum=0;
+      for(let i=1;i<fftLength;i++){
+        const v=data[i];
+        sum+=v*v;
+      }
+      const energy=Math.sqrt(sum/Math.max(1,fftLength-1));
+      const denom=energy+1e-6;
+      const barW=w/Math.max(1,targetBins);
+      const gap=Math.min(2,barW*0.35);
+      const barDrawW=Math.max(1,barW-gap);
+      let prevValues=canvas._fftPrevValues;
+      if(!prevValues||prevValues.length!==targetBins){
+        prevValues=new Float32Array(targetBins);
+        canvas._fftPrevValues=prevValues;
+      }
+      for(let i=0;i<targetBins;i++){
+        const idx=logMap[i] ?? 0;
+        const raw=data[idx] ?? 0;
+        const norm=raw/denom;
+        const value=clamp(norm*1.6,0,1);
+        const display=Math.max(value,prevValues[i]*0.92);
+        prevValues[i]=display;
+        if(display<=0) continue;
+        const alpha=Math.pow(display,0.85);
+        ctx.fillStyle=`rgba(120,200,255,${alpha})`;
+        const x=i*barW;
+        const barH=display*h;
+        ctx.fillRect(x,h-barH,barDrawW,barH);
       }
       ctx.strokeStyle='rgba(255,255,255,0.25)';
       ctx.strokeRect(0.5,0.5,w-1,h-1);
+    }
+
+    _getFftLogMap(fftLength,targetBins){
+      if(fftLength<2||targetBins<1){
+        return new Uint16Array(Math.max(0,targetBins));
+      }
+      if(this._fftLogMap && this._fftLogMapSize===fftLength && this._fftLogMapBins===targetBins){
+        return this._fftLogMap;
+      }
+      const logMap=new Uint16Array(targetBins);
+      if(targetBins===1){
+        logMap[0]=0;
+      } else {
+        const last=fftLength-1;
+        for(let i=0;i<targetBins;i++){
+          const t=i/(targetBins-1);
+          const mapped=Math.floor(Math.pow(fftLength,t)-1);
+          logMap[i]=Math.min(last,Math.max(0,mapped));
+        }
+      }
+      this._fftLogMap=logMap;
+      this._fftLogMapSize=fftLength;
+      this._fftLogMapBins=targetBins;
+      return logMap;
     }
 
     _drawSpectrogram(dtSec){
