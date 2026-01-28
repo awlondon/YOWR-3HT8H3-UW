@@ -203,16 +203,16 @@
             <button id="toggleAudio" class="btn-success" aria-pressed="false">Audio: Off</button>
             <button id="toggleLiveFft" class="btn-neutral" aria-pressed="false">Live FFT: Off</button>
             <button id="cycleLiveEntity" class="btn-neutral">Live Entity +</button>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="status">Vol</span>
+              <input id="volumeSlider" type="range" min="0" max="100" value="25" style="width:110px" />
+            </div>
           </div>
           <div class="row" style="margin-top:8px;">
             <span class="status" id="audioStatus">Audio muted</span>
           </div>
           <div class="row" style="margin-top:8px;">
-            <div class="audio-control">
-              <label for="volumeSlider">Volume</label>
-              <input id="volumeSlider" type="range" min="0" max="30" value="22" />
-              <span id="volumeLabel">22%</span>
-            </div>
+            <span class="status">Default volume is intentionally low for safety.</span>
           </div>
         </div>
         <div class="group" style="grid-column: span 6;" data-focus-lock="true">
@@ -534,7 +534,6 @@ this._ridgeHold.set(
       this.cycleLiveEntityBtn=document.getElementById('cycleLiveEntity');
       this.audioStatusEl=document.getElementById('audioStatus');
       this.volumeSlider=document.getElementById('volumeSlider');
-      this.volumeLabel=document.getElementById('volumeLabel');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
@@ -749,12 +748,17 @@ this._ridgeHold.set(
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
     }
+    _sliderToGain(value){
+      const minDb=-48;
+      const maxDb=-6;
+      const t=value/100;
+      const db=minDb+(maxDb-minDb)*t;
+      return Math.pow(10, db/20);
+    }
     _applyVolumeFromSlider(){
-      if(!this.volumeSlider || !this.volumeLabel) return;
-      const ui=Number(this.volumeSlider.value)/100;
-      const gain=ui*ui;
-      this.volumeLabel.textContent=`${this.volumeSlider.value}%`;
-      this.audio.setVolume(gain);
+      if(!this.volumeSlider) return;
+      const gain=this._sliderToGain(Number(this.volumeSlider.value));
+      this.audio.setMasterGain(gain);
     }
     _refreshAudioParams(){
       if(!this.audioEnabled) return;
@@ -3326,6 +3330,7 @@ this._ridgeHold.set(
       this.ctx=null;
       this.node=null;
       this.analyser=null;
+      this.masterGain=null;
       this.ready=false;
       this.enabled=false;
 
@@ -3333,6 +3338,7 @@ this._ridgeHold.set(
       this.speed=1;
       this.gateThreshold=0.02;
       this.userVolume=0.05;
+      this.masterGainValue=0.05;
       this.onMonitor=null;
       this.onMetrics=null;
     }
@@ -3347,8 +3353,11 @@ this._ridgeHold.set(
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
       const analyser=ctx.createAnalyser();
       analyser.fftSize=2048;
+      const masterGain=ctx.createGain();
+      masterGain.gain.value=this.masterGainValue;
       node.connect(analyser);
-      analyser.connect(ctx.destination);
+      analyser.connect(masterGain);
+      masterGain.connect(ctx.destination);
       node.port.onmessage=(event)=>{
         const type=event?.data?.type;
         if(type==='monitor'){
@@ -3361,6 +3370,7 @@ this._ridgeHold.set(
       };
       this.node=node;
       this.analyser=analyser;
+      this.masterGain=masterGain;
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
@@ -3387,16 +3397,12 @@ this._ridgeHold.set(
         userVolume
       });
     }
-    setVolume(v){
+    setMasterGain(v){
       if(!Number.isFinite(v)) return;
-      this.userVolume=Math.max(0,v);
-      this._postParams({
-        enabled:this.enabled,
-        wavetable:this.wavetable,
-        speed:this.speed,
-        gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
-      });
+      this.masterGainValue=Math.max(0,v);
+      if(this.masterGain){
+        this.masterGain.gain.value=this.masterGainValue;
+      }
     }
 
     setEnabled(on){
