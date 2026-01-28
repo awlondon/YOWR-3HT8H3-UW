@@ -6,7 +6,6 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     this.phase = 0;
     this.table = new Float32Array(0);
     this.speed = 1;
-    this.gain = 1;
     this.gateThreshold = 0.02;
     this.hpPrevX = 0;
     this.hpPrevY = 0;
@@ -26,7 +25,6 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
           }
         }
         if (Number.isFinite(msg.speed)) this.speed = msg.speed;
-        if (Number.isFinite(msg.gain)) this.gain = msg.gain;
         if (Number.isFinite(msg.gateThreshold)) this.gateThreshold = msg.gateThreshold;
         this.enabled = msg.enabled === true;
       }
@@ -75,7 +73,6 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
 
     let phase = this.phase;
     const speed = this.speed;
-    const gain = this.gain;
     const hpA = 0.995;
     let prevX = this.hpPrevX;
     let prevY = this.hpPrevY;
@@ -85,14 +82,14 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       const frac = phase - idx;
       const a = table[idx % tableLen];
       const b = table[(idx + 1) % tableLen];
-      let sample = (a + (b - a) * frac) * gain;
+      let sample = a + (b - a) * frac;
 
       const hp = sample - prevX + hpA * prevY;
       prevX = sample;
       prevY = hp;
       sample = Math.tanh(hp);
 
-      output[i] = sample;
+      output[i] = Math.max(-0.9, Math.min(0.9, sample));
 
       phase += speed;
       if (phase >= tableLen) phase -= tableLen * Math.floor(phase / tableLen);
