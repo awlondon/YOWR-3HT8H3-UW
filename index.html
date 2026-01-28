@@ -584,19 +584,12 @@ this._ridgeHold.set(
       this._entityFFT=null;
       this._hudWarning=null;
       this.canvasFocused=false;
-      // --- Audio (view-dependent synthesis) ---
+      // --- Audio (continuous noise filterbank) ---
       this.audioEnabled=false;         // start muted for visual focus
-      this.audioCtx=null;
-      this.audioNode=null;             // ScriptProcessor fallback
-      this.audioWorkletNode=null;      // preferred
-      this._audioPhaseT=0;             // seconds
-      this._audioParams={w:[],a:[],p:[]};   // angular freq, amplitude, phase
-      this._audioParamsPending=null;   // latest pushed set from render loop
-      this._audioGain=0.12;            // master gain (tune)
-      this._audioSmooth=0.15;          // param smoothing (0..1)
-      this._audioLastParamPush=0;
-      this._audioParamPushEveryMs=50;  // update ~20 Hz
-      this._audioMaxOsc=256;           // cap oscillators to stay stable
+      this.audio=new AudioEngine();
+      this._audioEveryMs=60;
+      this._audioLastTs=0;
+      this._lastAudioMag=null;
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -692,16 +685,15 @@ this._ridgeHold.set(
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
     }
-    _toggleAudio(){
+    async _toggleAudio(){
       this.audioEnabled=!this.audioEnabled;
+      if(this.audioEnabled){
+        await this.audio.init();
+        if(this.audio.ctx?.state==="suspended") await this.audio.ctx.resume();
+      }
+      this.audio.setEnabled(this.audioEnabled);
       const label=this.audioEnabled?"Audio enabled":"Audio muted";
       this._statusMsg(label);
-      if(this.audioEnabled){
-        this._ensureAudio();
-      } else if(this.audioCtx){
-        this._audioParamsPending={w:[],a:[],p:[]};
-        this._pushAudioParamsNow();
-      }
       this._syncAudioUi();
     }
     _toggleLiveFft(){
@@ -724,7 +716,11 @@ this._ridgeHold.set(
     }
 
     _bindEvents(){
-      const armAudio=()=>{if(this.audioEnabled) this._ensureAudio();};
+      const armAudio=async()=>{
+        if(!this.audioEnabled) return;
+        await this.audio.init();
+        if(this.audio.ctx?.state==="suspended") await this.audio.ctx.resume();
+      };
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
       window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
@@ -1100,219 +1096,60 @@ this._ridgeHold.set(
       this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
     }
 
-    async _ensureAudio(){
-      if(!this.audioEnabled) return;
-      if(this.audioCtx) {
-        if(this.audioCtx.state==="suspended") await this.audioCtx.resume();
-        return;
-      }
+    _visibleTris(){
+      const base=this.gen.activeTriangles();
+      if(!base||!base.length) return null;
 
-      const Ctx=window.AudioContext||window.webkitAudioContext;
-      if(!Ctx){ this._statusMsg("WebAudio not supported."); return; }
-
-      this.audioCtx=new Ctx({latencyHint:"interactive"});
-      if(this.audioCtx.state==="suspended") await this.audioCtx.resume();
-
-      // Preferred: AudioWorklet
-      if(this.audioCtx.audioWorklet){
-        const workletSrc=`
-          class HLSFProc extends AudioWorkletProcessor {
-            constructor(){
-              super();
-              this.w=new Float32Array(0);
-              this.a=new Float32Array(0);
-              this.p=new Float32Array(0);
-              this.wT=new Float32Array(0);
-              this.aT=new Float32Array(0);
-              this.pT=new Float32Array(0);
-              this.smooth=0.15;
-              this.gain=0.12;
-              this.t=0;
-              this.port.onmessage=(e)=>{
-                const d=e.data||{};
-                if(d.type==="params"){
-                  this.smooth=(typeof d.smooth==="number") ? d.smooth : this.smooth;
-                  this.gain=(typeof d.gain==="number") ? d.gain : this.gain;
-
-                  // Targets
-                  this.wT=new Float32Array(d.w||[]);
-                  this.aT=new Float32Array(d.a||[]);
-                  this.pT=new Float32Array(d.p||[]);
-
-                  // Current arrays sized to target
-                  if(this.w.length!==this.wT.length){
-                    this.w=new Float32Array(this.wT.length);
-                    this.a=new Float32Array(this.aT.length);
-                    this.p=new Float32Array(this.pT.length);
-                    this.w.set(this.wT);
-                    this.a.set(this.aT);
-                    this.p.set(this.pT);
-                  }
-                }
-              };
-            }
-            process(inputs,outputs,params){
-              const out=outputs[0];
-              const ch0=out[0];
-              const sr=sampleRate;
-              const N=ch0.length;
-              const nOsc=this.w.length;
-
-              for(let i=0;i<N;i++){
-                // smooth params toward targets
-                const s=this.smooth;
-                let y=0;
-                for(let k=0;k<nOsc;k++){
-                  const w=this.w[k]+=(this.wT[k]-this.w[k])*s;
-                  const a=this.a[k]+=(this.aT[k]-this.a[k])*s;
-                  const p=this.p[k]+=(this.pT[k]-this.p[k])*s;
-                  y+=a*Math.sin(w*this.t+p);
-                }
-                // soft clip
-                y=Math.tanh(y)*this.gain;
-                ch0[i]=y;
-                this.t+=1/sr;
-              }
-              if(out[1]) out[1].set(ch0);
-              return true;
-            }
-          }
-          registerProcessor("hlsf-proc",HLSFProc);
-        `;
-        const blob=new Blob([workletSrc],{type:"application/javascript"});
-        const url=URL.createObjectURL(blob);
-        await this.audioCtx.audioWorklet.addModule(url);
-        URL.revokeObjectURL(url);
-
-        this.audioWorkletNode=new AudioWorkletNode(this.audioCtx,"hlsf-proc",{
-          numberOfInputs:0,
-          numberOfOutputs:1,
-          outputChannelCount:[2],
-        });
-        this.audioWorkletNode.connect(this.audioCtx.destination);
-
-        // push an initial (silent) param set
-        this._pushAudioParamsNow();
-        this._statusMsg("Audio armed (worklet).");
-        return;
-      }
-
-      // Fallback: ScriptProcessor (works, but older)
-      const bufSize=1024;
-      this.audioNode=this.audioCtx.createScriptProcessor(bufSize,0,1);
-      this.audioNode.onaudioprocess=(e)=>{
-        const out=e.outputBuffer.getChannelData(0);
-        const sr=this.audioCtx.sampleRate;
-        const N=out.length;
-
-        // pull latest pending params
-        if(this._audioParamsPending){
-          const d=this._audioParamsPending;
-          this._audioParamsPending=null;
-          this._audioParams=d;
-        }
-
-        const w=this._audioParams.w, a=this._audioParams.a, p=this._audioParams.p;
-        const nOsc=w.length;
-        let t=this._audioPhaseT;
-
-        for(let i=0;i<N;i++){
-          let y=0;
-          for(let k=0;k<nOsc;k++){
-            y+=a[k]*Math.sin(w[k]*t+p[k]);
-          }
-          out[i]=Math.tanh(y)*this._audioGain;
-          t+=1/sr;
-        }
-        this._audioPhaseT=t;
-      };
-      this.audioNode.connect(this.audioCtx.destination);
-      this._statusMsg("Audio armed (scriptprocessor).");
-    }
-
-    _pushAudioParamsNow(){
-      const d=this._audioParamsPending||this._audioParams;
-      if(this.audioWorkletNode){
-        this.audioWorkletNode.port.postMessage({
-          type:"params",
-          w:d.w, a:d.a, p:d.p,
-          gain:this._audioGain,
-          smooth:this._audioSmooth
-        });
-      }
-    }
-
-    // Map triangles -> oscillator params derived from current view
-    _updateAudioFromTriangles(tris){
-      if(!this.audioEnabled) return;
-      if(!this.audioCtx) return;
-
-      const pivot=this.gen.activePivot();
       const [xmin,ymin,xmax,ymax]=this._worldViewRect();
-      const corners=[[xmin,ymin],[xmin,ymax],[xmax,ymin],[xmax,ymax]];
-      let rMin=Infinity, rMax=0;
-      for(const c of corners){
-        const r=Math.hypot(c[0]-pivot[0],c[1]-pivot[1]);
-        if(r<rMin) rMin=r;
-        if(r>rMax) rMax=r;
-      }
-      if(!(rMax>rMin)){ rMin=0; rMax=1; }
-
-      // frequency range (tune)
-      const fLo=80, fHi=1200;
-      const log=(x)=>Math.log(x);
-      const r0=Math.max(1e-6,rMin);
-      const r1=Math.max(r0*1.001,rMax);
-      const lr0=log(r0), lr1=log(r1);
-
-      // Downsample triangles -> oscillators (cap)
-      const stride=Math.max(1,Math.floor(tris.length/this._audioMaxOsc));
-      const w=[], a=[], p=[];
-
-      const levelWeight=this._levelWeight(this.levels);
-      for(let i=0;i<tris.length;i+=stride){
-        const tri=tris[i];
+      const out=[];
+      for(const tri of base){
         const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
         const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+        if(cx>=xmin && cx<=xmax && cy>=ymin && cy<=ymax) out.push(tri);
+      }
+      return out.length ? out : null;
+    }
 
-        const r=Math.max(1e-6,Math.hypot(cx-pivot[0],cy-pivot[1]));
-        const u=(log(r)-lr0)/(lr1-lr0);
-        const f=fLo*Math.pow(fHi/fLo,clamp(u,0,1));
-        const omega=TAU*f;
+    _computeSpectrumForAudio({bins=64}={}){
+      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
+      const resolvedBins=this._ensureFftBins(bins*2,"Audio FFT");
 
-        // amplitude: small but increases with “visibility density”
-        const area=this._triangleArea(tri);
-        const vis=this._triangleVisibility(tri,[xmin,ymin,xmax,ymax]);
-        const visW=vis ? 1 : 0.35;
-        const screenW=this._screenCenterWeight(cx,cy);
-        if(screenW<=0) continue;
-        const focus=this._attentionGain(screenW);
-        const amp=Math.sqrt(area)*visW*levelWeight*focus;
-        const ph=Math.atan2(cy-pivot[1],cx-pivot[0]); // spatial phase
-
-        w.push(omega);
-        a.push(amp);
-        p.push(ph);
-        if(w.length>=this._audioMaxOsc) break;
+      const vTris=this._visibleTris();
+      if(vTris){
+        const sig=this._computeEntitySignalFromTris(vTris,k,resolvedBins);
+        if(sig){
+          const mag=this._fftMagnitude(sig);
+          if(mag&&mag.length) return mag;
+        }
       }
 
-      // always-on bed to avoid total silence at macro zoom
-      w.push(TAU*110);
-      a.push(0.02);
-      p.push(0);
+      const sigB=this._computeEntitySignal(k,resolvedBins);
+      if(sigB){
+        const magB=this._fftMagnitude(sigB);
+        if(magB&&magB.length) return magB;
+      }
 
-      // Normalize amplitude so sum doesn’t explode
-      const n=w.length||1;
-      const norm=Math.min(1,1/Math.sqrt(n));
-      for(let i=0;i<a.length;i++) a[i]*=norm;
+      const sigC=this._computeEntitySignal(0,resolvedBins);
+      if(sigC){
+        const magC=this._fftMagnitude(sigC);
+        if(magC&&magC.length) return magC;
+      }
 
-      const payload={w,a,p};
-      this._audioParamsPending=payload;
+      return this._lastAudioMag ?? null;
+    }
 
+    _updateAudioTick(){
+      if(!this.audioEnabled) return;
       const now=performance.now();
-      if(now-this._audioLastParamPush>this._audioParamPushEveryMs){
-        this._audioLastParamPush=now;
-        this._pushAudioParamsNow();
+      if(now-this._audioLastTs<this._audioEveryMs) return;
+      this._audioLastTs=now;
+
+      const mag=this._computeSpectrumForAudio({bins:64});
+      if(mag){
+        this._lastAudioMag=mag;
+        this.audio.updateFromMagnitude(mag);
+      } else if(this._lastAudioMag){
+        this.audio.updateFromMagnitude(this._lastAudioMag);
       }
     }
 
@@ -2842,31 +2679,30 @@ this._ridgeHold.set(
         const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
         for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
         this._updateLiveSpectrogram(allTris,dtSec);
-        this._updateAudioFromTriangles(allTris);
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
           this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angle=this._snapAngle(this.globalAngle);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); this._updateAudioFromTriangles(seed); drew=true; }
+          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
         } else {
           this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angle=this._snapAngle(this.globalAngle);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-          this._updateAudioFromTriangles(allTris);
           drew=true;
         }
       } else {
         const base=this.gen.activeTriangles();
-        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); this._updateAudioFromTriangles(base); drew=true}
-        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); this._updateAudioFromTriangles(seed); drew=true}}
+        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
+        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
       }
       this._drawLiveSpectrogramHUD();
+      this._updateAudioTick();
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
@@ -3025,6 +2861,102 @@ this._ridgeHold.set(
       window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
       window.compareFingerprints=(f1,f2)=>this.compareFingerprints(f1,f2);
       window.computeEntityTimeSignal=(k,opts)=>this.computeEntityTimeSignal(k,opts);
+    }
+  }
+
+  class AudioEngine {
+    constructor(){
+      this.ctx=null;
+      this.master=null;
+      this.noise=null;
+      this.filters=[];
+      this.gains=[];
+      this.enabled=false;
+
+      this.bands=32;
+      this.fMin=80;
+      this.fMax=6000;
+
+      this.lastMag=null;
+    }
+
+    async init(){
+      if(this.ctx) return;
+      const Ctx=window.AudioContext||window.webkitAudioContext;
+      if(!Ctx) return;
+      const ctx=new Ctx();
+      this.ctx=ctx;
+
+      const master=ctx.createGain();
+      master.gain.value=0.0;
+      master.connect(ctx.destination);
+      this.master=master;
+
+      const bufSize=2*ctx.sampleRate;
+      const buf=ctx.createBuffer(1,bufSize,ctx.sampleRate);
+      const data=buf.getChannelData(0);
+      for(let i=0;i<bufSize;i++) data[i]=(Math.random()*2-1);
+      const src=ctx.createBufferSource();
+      src.buffer=buf;
+      src.loop=true;
+
+      const logMin=Math.log(this.fMin);
+      const logMax=Math.log(this.fMax);
+
+      for(let i=0;i<this.bands;i++){
+        const u=i/(this.bands-1);
+        const f=Math.exp(logMin+(logMax-logMin)*u);
+
+        const bp=ctx.createBiquadFilter();
+        bp.type="bandpass";
+        bp.frequency.value=f;
+        bp.Q.value=10;
+
+        const g=ctx.createGain();
+        g.gain.value=0.0;
+
+        src.connect(bp);
+        bp.connect(g);
+        g.connect(master);
+
+        this.filters.push(bp);
+        this.gains.push(g);
+      }
+
+      src.start();
+      this.noise=src;
+    }
+
+    setEnabled(on){
+      if(!this.ctx) return;
+      this.enabled=!!on;
+      const t=this.ctx.currentTime;
+      const target=this.enabled ? 0.9 : 0.0;
+      this.master.gain.setTargetAtTime(target,t,0.02);
+    }
+
+    updateFromMagnitude(mag){
+      if(!this.ctx || !this.enabled){ this.lastMag=mag; return; }
+      if(!mag || !mag.length) return;
+
+      let mx=0;
+      for(let i=1;i<mag.length;i++) mx=Math.max(mx,mag[i]);
+      if(mx<1e-6) return;
+
+      const t=this.ctx.currentTime;
+      const tau=0.02;
+      const bins=mag.length;
+
+      for(let i=0;i<this.bands;i++){
+        const u=i/(this.bands-1);
+        const bin=Math.max(1,Math.min(bins-1,Math.round(u*(bins-1))));
+        const v=mag[bin]/mx;
+        const amp=Math.min(1.0,v*v);
+        const gated=amp<0.03?0.0:amp;
+        this.gains[i].gain.setTargetAtTime(gated,t,tau);
+      }
+
+      this.lastMag=mag;
     }
   }
 
