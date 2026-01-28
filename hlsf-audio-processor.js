@@ -108,14 +108,18 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     const minAudible = this.minAudible;
     const gain = rms > 0 ? Math.max(rms, minAudible) : 0;
     const finalGain = Math.min(1.0, gain * (this.userVolume ?? 0.08));
+    this.port.postMessage({
+      type: 'audio-metrics',
+      rms,
+      gain: finalGain,
+      audible: rms >= minAudible
+    });
     for (let i = 0; i < output.length; i++) {
       const sample = output[i] * finalGain;
       output[i] = Math.max(-0.9, Math.min(0.9, sample));
     }
 
-    if ((this.frameCount++ % 60) === 0) {
-      console.log("RMS:", rms.toFixed(5));
-    }
+    this.frameCount++;
 
     for (let i = 0; i < output.length; i++) {
       this._pushMonitorSample(output[i]);
