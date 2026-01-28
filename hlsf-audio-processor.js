@@ -26,6 +26,15 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
 
     this.port.onmessage = (e) => {
       const msg = e.data;
+      if (msg.type === 'reset') {
+        this.phase = 0;
+        this.hpPrevX = 0;
+        this.hpPrevY = 0;
+        this.monitorWrite = 0;
+        this.monitorCounter = 0;
+        this.metricsCounter = 0;
+        return;
+      }
       if (msg.type === 'params') {
         if (msg.wavetable) {
           this.table = msg.wavetable;
