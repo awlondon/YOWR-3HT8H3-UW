@@ -3,7 +3,7 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
     super();
 
     this.sampleRate = sampleRate;
-    this.phase = 0;
+    this.phase = [];
 
     this.frequencies = [];
     this.amplitudes = [];
@@ -15,12 +15,15 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
         this.frequencies = msg.freqs || [];
         this.amplitudes = msg.amps || [];
         this.enabled = msg.enabled === true;
+        this.phase.length = this.frequencies.length;
+        this.phase.fill(0);
       }
     };
   }
 
   process(inputs, outputs){
     const output = outputs[0][0];
+    const AUDIBLE_EPS = 1e-4;
 
     if (!this.enabled || this.frequencies.length === 0) {
       output.fill(0);
@@ -33,10 +36,12 @@ class HLSFAudioProcessor extends AudioWorkletProcessor {
       for (let k = 0; k < this.frequencies.length; k++) {
         const freq = this.frequencies[k];
         const amp = this.amplitudes[k] ?? 0;
-        sample += Math.sin(this.phase * freq) * amp;
+        sample += Math.sin(this.phase[k]) * amp;
+        this.phase[k] += (2 * Math.PI * freq) / this.sampleRate;
+        if (this.phase[k] > Math.PI * 2) this.phase[k] -= Math.PI * 2;
       }
 
-      this.phase += 2 * Math.PI / this.sampleRate;
+      if (Math.abs(sample) < AUDIBLE_EPS) sample = 0;
       output[i] = sample;
     }
 

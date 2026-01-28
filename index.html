@@ -592,7 +592,7 @@ this._ridgeHold.set(
       this._hudWarning=null;
       this.canvasFocused=false;
       // --- Audio (continuous noise filterbank) ---
-      this.audioEnabled=false;         // start muted for visual focus
+      this.audioEnabled=true;         // start enabled for default audio playback
       this.audio=new AudioEngine();
       this._audioEveryMs=60;
       this._audioLastTs=0;
@@ -611,6 +611,7 @@ this._ridgeHold.set(
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._syncAudioUi();
+      this._bootAudio();
       this._loop();
     }
 
@@ -692,13 +693,30 @@ this._ridgeHold.set(
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
     }
+    _refreshAudioParams(){
+      if(!this.audioEnabled) return;
+      const mag=this._computeSpectrumForAudio({bins:64});
+      if(mag){
+        this._lastAudioMag=mag;
+        this.audio.updateFromMagnitude(mag);
+      } else if(this._lastAudioMag){
+        this.audio.updateFromMagnitude(this._lastAudioMag);
+      }
+    }
+    async _bootAudio(){
+      if(!this.audioEnabled) return;
+      await this.audio.init();
+      await this.audio.resume();
+      this.audio.setEnabled(true);
+      this._refreshAudioParams();
+    }
     async _toggleAudio(){
       this.audioEnabled=!this.audioEnabled;
       if(this.audioEnabled){
-        await this.audio.init();
-        if(this.audio.ctx?.state==="suspended") await this.audio.ctx.resume();
+        await this._bootAudio();
+      } else {
+        this.audio.setEnabled(false);
       }
-      this.audio.setEnabled(this.audioEnabled);
       const label=this.audioEnabled?"Audio enabled":"Audio muted";
       this._statusMsg(label);
       this._syncAudioUi();
@@ -725,8 +743,7 @@ this._ridgeHold.set(
     _bindEvents(){
       const armAudio=async()=>{
         if(!this.audioEnabled) return;
-        await this.audio.init();
-        if(this.audio.ctx?.state==="suspended") await this.audio.ctx.resume();
+        await this._bootAudio();
       };
       window.addEventListener('pointerdown',armAudio,{once:true,passive:true});
       window.addEventListener('keydown',armAudio,{once:true,passive:true});
@@ -830,7 +847,7 @@ this._ridgeHold.set(
       window.addEventListener('blur',()=>{
         this.canvasFocused=false;
       });
-      this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render()},{passive:false});
+      this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render(); this._refreshAudioParams()},{passive:false});
       if(this.specCanvas){
         this.specCanvas.addEventListener('mousemove',e=>this._updateSpectrogramReadout(e));
         this.specCanvas.addEventListener('mouseleave',()=>this._clearSpectrogramReadout());
@@ -931,16 +948,16 @@ this._ridgeHold.set(
     _togglePauseEmergent(){if(!this.emergentActive)return; this.emergentPaused=!this.emergentPaused; this.pauseEmergentBtn.textContent=this.emergentPaused?"Resume Emergent":"Pause Emergent"; this.stepBackBtn.disabled=!this.emergentPaused; this.stepForwardBtn.disabled=!this.emergentPaused}
     _applyBg(){this.wrap.style.background=this.whiteBg?'#fff':'#000'; this.toggleBgBtn.setAttribute('aria-pressed',String(this.whiteBg)); this.toggleBgBtn.textContent=this.whiteBg?"BG: White":"BG: Black"}
     _toggleBg(){this.whiteBg=!this.whiteBg; this._applyBg(); this._render()}
-    _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render()}
+    _zoomAtCanvasPoint(f){const cx=this.canvas.clientWidth/2, cy=this.canvas.clientHeight/2; this._zoomAtClientPoint(f,cx,cy); this._render(); this._refreshAudioParams()}
     _zoomAtClientPoint(f,clientX,clientY){const rect=this.canvas.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top, prev=this.scale; this.scale*=f; this.tx=x-(x-this.tx)*(this.scale/prev); this.ty=y-(y-this.ty)*(this.scale/prev)}
-    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._updateModeIndicator()}
+    _resetView(){this.entityFocusActive=false; this._setFocusMode(false); this._stopEntityRevealTour(); this._zoomToDesignExtent(); this._render(); this._refreshAudioParams(); this._updateModeIndicator()}
     _viewPortal(){
       if(this.levels<1){this._statusMsg("View Portal is available only for levels ≥ 1."); return}
       this._stopEntityRevealTour();
       const pivot=this.gen.activePivot(), full=this.gen.activeTriangles(), tris=(full&&full.length)?full:this.gen.activeSeedTris(); if(!tris||!tris.length)return;
       let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
       if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
-      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true); this._render(); this._updateModeIndicator();
+      const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true); this._render(); this._refreshAudioParams(); this._updateModeIndicator();
     }
     _downloadPng(){
       try{
@@ -1471,7 +1488,7 @@ this._ridgeHold.set(
       if(cumulative>=0.9999){ if(!this.edgesOnly){this.edgesOnly=true; this.toggleEdgesBtn.textContent="Show Colors"; this.whiteBg=true; this._applyBg()} this.toggleEdgesBtn.disabled=true } else { this.toggleEdgesBtn.disabled=false }
 
       if(!wantDefer) this._zoomToDesignExtent();
-      this._updateHeaderLabels(); this._updateStatus(); this._render();
+      this._updateHeaderLabels(); this._updateStatus(); this._render(); this._refreshAudioParams();
     }
 
     _entityRadiusBounds(){
@@ -2661,11 +2678,15 @@ this._ridgeHold.set(
       if(!animate){
         this._zoomToRect(targetRect);
         this._render();
+        this._refreshAudioParams();
         this._startEntityRevealTour(kk,rNear,rFar);
         return;
       }
 
-      this._animateZoomToRect(targetRect,420,()=>this._startEntityRevealTour(kk,rNear,rFar));
+      this._animateZoomToRect(targetRect,420,()=>{
+        this._startEntityRevealTour(kk,rNear,rFar);
+        this._refreshAudioParams();
+      });
     }
     _advanceEntity(dir){
       const n=this.sides;
@@ -2847,7 +2868,10 @@ this._ridgeHold.set(
 
         this._render();
         if(u<1) requestAnimationFrame(step);
-        else if(typeof onDone==="function") onDone();
+        else {
+          if(typeof onDone==="function") onDone();
+          this._refreshAudioParams();
+        }
       };
 
       requestAnimationFrame(step);
@@ -2970,6 +2994,8 @@ this._ridgeHold.set(
       this.freqStep=12;
 
       this.lastMag=null;
+      this.lastFreqs=[];
+      this.lastAmps=[];
     }
 
     async init(){
@@ -2983,16 +3009,35 @@ this._ridgeHold.set(
       node.connect(ctx.destination);
       this.node=node;
       this.ready=true;
+      this._postParams({
+        enabled:this.enabled,
+        freqs:this.lastFreqs,
+        amps:this.lastAmps
+      });
+    }
+
+    async resume(){
+      if(!this.ctx) return;
+      if(this.ctx.state==="suspended") await this.ctx.resume().catch(()=>{});
+    }
+
+    _postParams({enabled,freqs,amps}){
+      if(!this.node) return;
+      this.node.port.postMessage({
+        type:'params',
+        enabled,
+        freqs,
+        amps
+      });
     }
 
     setEnabled(on){
       if(!this.ctx || !this.node) return;
       this.enabled=!!on;
-      this.node.port.postMessage({
-        type:'params',
+      this._postParams({
         enabled:this.enabled,
-        freqs:[],
-        amps:[]
+        freqs:this.lastFreqs,
+        amps:this.lastAmps
       });
     }
 
@@ -3013,8 +3058,9 @@ this._ridgeHold.set(
       }
 
       if(!amps.length){
-        this.node.port.postMessage({
-          type:'params',
+        this.lastFreqs=[];
+        this.lastAmps=[];
+        this._postParams({
           enabled:false,
           freqs:[],
           amps:[]
@@ -3028,11 +3074,12 @@ this._ridgeHold.set(
         amps[i]=amps[i]/denom;
       }
 
-      this.node.port.postMessage({
-        type:'params',
+      this.lastFreqs=[...freqs];
+      this.lastAmps=[...amps];
+      this._postParams({
         enabled:true,
-        freqs,
-        amps
+        freqs:this.lastFreqs,
+        amps:this.lastAmps
       });
 
       this.lastMag=mag;
