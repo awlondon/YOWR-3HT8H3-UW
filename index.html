@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PDCo HLSF Engine Visualizer (Web)</title>
   <style>
-    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; }
+    :root { --bg:#0b0b0b; --panel:#121212; --ink:#e9e9e9; --muted:#a5a5a5; --accent:#6cf; --btn:#1c1c1c; --btn-h:#242424; --border:#2a2a2a; --header-height:260px; }
     :root {
       --btn-fg:#e9e9e9; --btn-bg:#1c1c1c; --btn-bg-h:#242424; --btn-bd:#2a2a2a;
       --primary:#3aa5ff; --primary-h:#2e83cc; --primary-bd:#1f5e91;
@@ -15,9 +15,10 @@
       --neutral:#374151; --neutral-h:#4b5563; --neutral-bd:#1f2937;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
-    .app{display:grid;grid-template-rows:auto minmax(180px,28vh) minmax(0,1fr) 140px auto;height:100vh;width:100vw;overflow:hidden}
+    .app{display:flex;flex-direction:column;height:100vh;width:100vw;overflow:hidden}
     @supports(height:100dvh){.app{height:100dvh}}
-    .app.spec-hidden{grid-template-rows:auto 0px minmax(0,1fr) 140px auto}
+    .visual-stack{display:grid;grid-template-rows:160px 1fr 120px;height:calc(100vh - var(--header-height));min-height:0}
+    .app.spec-hidden .visual-stack{grid-template-rows:0px 1fr 120px}
     .app.spec-hidden #spectrogramPanel{display:none}
     #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
     header,footer{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border)}
@@ -59,22 +60,20 @@
     .guide li{margin:4px 0}
     .guide code{font-family:ui-monospace,Menlo,Consolas,"SF Mono","Roboto Mono",monospace;font-size:12px;color:var(--accent)}
     .guide .note{color:var(--muted);font-size:12px}
-    .panel{background:var(--panel);display:flex;flex-direction:column;min-height:0}
-    #spectrogramPanel{position:relative;overflow:hidden;background:radial-gradient(ellipse at top, #0d1220, #05070c);border-bottom:1px solid #1a1a1a}
-    #hlsfPanel{background:#000;overflow:hidden}
-    #waveformPanel{background:#050505;border-top:1px solid #222;padding:6px 10px;display:flex;flex-direction:column}
+    header, .controls{position:relative;z-index:10}
+    .panel{position:relative;overflow:hidden;border-top:1px solid var(--border);background:var(--panel);min-height:0}
+    .panel-spec{background:radial-gradient(ellipse at top, #0d1220, #05070c)}
+    .panel-hlsf{background:#000}
+    .panel-wave{background:#050505}
+    .panel canvas{position:absolute;inset:0}
     .spec-header{padding:12px;border-bottom:1px solid var(--border);background:#0b0f1a}
     .spec-controls{display:flex;flex-direction:column;gap:8px}
     .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-    .spec-body{position:relative;flex:1;min-height:0;background:radial-gradient(circle at top left, rgba(108,204,255,0.08), transparent 45%),#05060a}
-    .spec-body canvas{width:100%;height:100%}
-    .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border)}
+    .spec-controls-panel{background:var(--panel);border-bottom:1px solid var(--border)}
+    .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border);z-index:2;pointer-events:none}
     .spec-meta{font-size:12px;color:var(--muted)}
-    .spec-hidden #spectrogramPanel{display:none;}
-    .scope-header{padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
-    .waveform-body{flex:1;min-height:0}
-    .waveform-body canvas{width:100%;height:100%;display:block}
-    .canvas-wrap{position:relative;background:#000;min-height:0;flex:1} canvas{display:block;width:100%;height:100%;position:relative;z-index:1}
+    .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
+    canvas{width:100%;height:100%;display:block}
     .hlsf-overlay,
     .spectrogram-overlay,
     .debug-overlay{pointer-events:none}
@@ -97,8 +96,8 @@
     [data-focus-lock="true"]{transition:opacity .2s ease}
     body.focus-mode [data-focus-lock="true"]{opacity:0.35;pointer-events:none}
     @media (max-width:1100px){
-      .app{grid-template-rows:auto minmax(160px,32vh) minmax(0,1fr) 160px auto}
-      .app.spec-hidden{grid-template-rows:auto 0px minmax(0,1fr) 160px auto}
+      .visual-stack{grid-template-rows:160px 1fr 160px}
+      .app.spec-hidden .visual-stack{grid-template-rows:0px 1fr 160px}
     }
   </style>
 </head>
@@ -300,56 +299,56 @@ this._ridgeHold.set(
   : `rgba(180,220,255,${alpha})`;</pre>
       </details>
     </section>
-  </div>
 
-  <section id="spectrogramPanel" class="panel">
-      <div class="spec-header">
-        <div class="spec-controls">
-          <div class="spec-row">
-            <strong>Spectrogram</strong>
-            <span class="spec-meta" id="specInfo">No session loaded</span>
-            <button id="toggleSpecPanel" class="btn-neutral" style="margin-left:auto;">Hide Panel</button>
-          </div>
-          <div class="spec-row">
-            <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
-            <button id="specViewOmegaTime" class="btn-neutral" aria-pressed="false">ω–t</button>
-            <button id="specViewLevelTime" class="btn-neutral" aria-pressed="false">L–t</button>
-          </div>
-          <div class="spec-row">
-            <button id="specZoomOmegaIn">Zoom ω +</button>
-            <button id="specZoomOmegaOut">Zoom ω −</button>
-            <button id="specZoomLevelIn">Zoom L +</button>
-            <button id="specZoomLevelOut">Zoom L −</button>
-            <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
-          </div>
-          <div class="spec-row">
-            <button id="exportSpec" class="btn-neutral">Export Session</button>
-            <button id="importSpec" class="btn-neutral">Import Session</button>
-            <button id="replaySpec" class="btn-warning">Replay Session</button>
-          </div>
-          <div class="spec-row">
-            <label for="sliceBinInput">ω bin:</label>
-            <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
-            <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
-          </div>
+  <section class="spec-controls-panel" aria-label="Spectrogram controls">
+    <div class="spec-header">
+      <div class="spec-controls">
+        <div class="spec-row">
+          <strong>Spectrogram</strong>
+          <span class="spec-meta" id="specInfo">No session loaded</span>
+          <button id="toggleSpecPanel" class="btn-neutral" style="margin-left:auto;">Hide Panel</button>
+        </div>
+        <div class="spec-row">
+          <button id="specViewOmegaLevel" class="btn-primary" aria-pressed="true">ω–L</button>
+          <button id="specViewOmegaTime" class="btn-neutral" aria-pressed="false">ω–t</button>
+          <button id="specViewLevelTime" class="btn-neutral" aria-pressed="false">L–t</button>
+        </div>
+        <div class="spec-row">
+          <button id="specZoomOmegaIn">Zoom ω +</button>
+          <button id="specZoomOmegaOut">Zoom ω −</button>
+          <button id="specZoomLevelIn">Zoom L +</button>
+          <button id="specZoomLevelOut">Zoom L −</button>
+          <button id="specZoomReset" class="btn-neutral">Reset Zoom</button>
+        </div>
+        <div class="spec-row">
+          <button id="exportSpec" class="btn-neutral">Export Session</button>
+          <button id="importSpec" class="btn-neutral">Import Session</button>
+          <button id="replaySpec" class="btn-warning">Replay Session</button>
+        </div>
+        <div class="spec-row">
+          <label for="sliceBinInput">ω bin:</label>
+          <input id="sliceBinInput" type="number" min="1" step="1" value="6" />
+          <button id="toggleCubeSlice" class="btn-neutral" aria-pressed="true">L×t Slice</button>
         </div>
       </div>
-      <div class="spec-body" id="specBody">
-        <canvas id="specCanvas" width="1024" height="512"></canvas>
-        <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
-      </div>
-    </section>
-
-  <section id="hlsfPanel" class="panel">
-    <div class="canvas-wrap" id="canvasWrap"><canvas id="canvas" tabindex="0"></canvas></div>
-  </section>
-
-  <section id="waveformPanel" class="panel">
-    <div class="scope-header">Oscilloscope</div>
-    <div class="waveform-body">
-      <canvas id="scopeCanvas"></canvas>
     </div>
   </section>
+
+  <div class="visual-stack">
+    <div id="spectrogramPanel" class="panel panel-spec">
+      <canvas id="spectrogramCanvas"></canvas>
+      <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
+    </div>
+
+    <div id="hlsfPanel" class="panel panel-hlsf">
+      <canvas id="hlsfCanvas" tabindex="0"></canvas>
+    </div>
+
+    <div id="waveformPanel" class="panel panel-wave">
+      <div class="scope-header">Oscilloscope</div>
+      <canvas id="waveCanvas"></canvas>
+    </div>
+  </div>
 
   <footer>
     <div class="status" id="status">Ready</div>
@@ -512,7 +511,9 @@ this._ridgeHold.set(
 
   class App{
     constructor(){
-      this.canvas=document.getElementById('canvas'); this.wrap=document.getElementById('canvasWrap'); this.ctx=this.canvas.getContext('2d');
+      this.canvas=document.getElementById('hlsfCanvas');
+      this.wrap=document.getElementById('hlsfPanel');
+      this.ctx=this.canvas.getContext('2d');
       this.deferThreshold=400000;
       this.sidesInput=document.getElementById('sidesInput'); this.nMinus=document.getElementById('nMinus'); this.nPlus=document.getElementById('nPlus'); this.updateBtn=document.getElementById('updatePlot'); this.levelButtons=document.getElementById('levelButtons'); this.cancelBtn=document.getElementById('cancelGen');
       this.alphaInput=document.getElementById('alphaInput'); this.applyAlphaBtn=document.getElementById('applyAlpha'); this.autoAlphaBtn=document.getElementById('autoAlpha'); this.overlayAlpha=document.getElementById('overlayAlpha');
@@ -549,12 +550,15 @@ this._ridgeHold.set(
       this.tabPanels=Array.from(document.querySelectorAll('[data-tab-panel]'));
       this.appRoot=document.getElementById('appRoot');
       this.specPanel=document.getElementById('spectrogramPanel');
-      this.specBody=document.getElementById('specBody');
-      this.specCanvas=document.getElementById('specCanvas');
+      this.specControls=document.querySelector('.spec-controls-panel');
+      this.topBar=document.getElementById('topBar');
+      this.guide=document.querySelector('.guide');
+      this.footer=document.querySelector('footer');
+      this.specCanvas=document.getElementById('spectrogramCanvas');
       this.specCtx=this.specCanvas?this.specCanvas.getContext('2d'):null;
       this.specReadout=document.getElementById('specReadout');
-      this.scopeCanvas=document.getElementById('scopeCanvas');
-      this.scopeCtx=this.scopeCanvas?this.scopeCanvas.getContext('2d'):null;
+      this.waveCanvas=document.getElementById('waveCanvas');
+      this.waveCtx=this.waveCanvas?this.waveCanvas.getContext('2d'):null;
       this.scopeBuf=new Float32Array(512);
       this.scopeWrite=0;
       this.scopeRMS=0;
@@ -696,7 +700,7 @@ this._ridgeHold.set(
     _estimateTriangles(n,L){const t0=(n%2===0)?Math.floor(n/2):Math.floor(n/2)+1; if(L<=0) return t0; return t0*Math.pow(n,L)}
     _isPortalZoomed(){const [xmin,ymin,xmax,ymax]=this._worldViewRect(); return Math.hypot(xmax-xmin,ymax-ymin)<1.25 }
 
-    _render(){ this._drawFrame(0); this._renderSpectrogramPanel(0); this._updateStatus(); this._drawnOnce=true }
+    _render(){ this._drawFrame(0); this._drawSpectrogram(0); this._drawWaveform(); this._updateStatus(); this._drawnOnce=true }
 
     _buildLevelButtons(){ this.levelButtons.innerHTML=''; for(let L=0;L<=10;L++){const b=document.createElement('button'); b.className='lvl-btn'; b.textContent=String(L); if(L===this.levels)b.classList.add('active'); b.addEventListener('click',()=>this.setLevel(L)); this.levelButtons.appendChild(b)}}
     _markActiveLevel(){[...this.levelButtons.children].forEach((el,i)=>el.classList.toggle('active',i===this.levels))}
@@ -987,8 +991,8 @@ this._ridgeHold.set(
     }
 
     _resizeSpectrogram(){
-      if(!this.specCanvas || !this.specBody) return;
-      const rect=this.specBody.getBoundingClientRect();
+      if(!this.specCanvas || !this.specPanel) return;
+      const rect=this.specPanel.getBoundingClientRect();
       const dpr=Math.max(1,window.devicePixelRatio||1);
       const w=Math.max(1,rect.width);
       const h=Math.max(1,rect.height);
@@ -1002,23 +1006,30 @@ this._ridgeHold.set(
       }
     }
 
-    _resizeScope(){
-      if(!this.scopeCanvas || !this.scopeCtx) return;
-      const rect=this.scopeCanvas.getBoundingClientRect();
+    _resizeWave(){
+      if(!this.waveCanvas || !this.waveCtx) return;
+      const rect=this.waveCanvas.getBoundingClientRect();
       const dpr=Math.max(1,window.devicePixelRatio||1);
       const w=Math.max(1,rect.width);
       const h=Math.max(1,rect.height);
-      this.scopeCanvas.width=Math.max(1,(w*dpr)|0);
-      this.scopeCanvas.height=Math.max(1,(h*dpr)|0);
-      this.scopeCtx.setTransform(1,0,0,1,0,0);
-      this.scopeCtx.scale(dpr,dpr);
+      this.waveCanvas.width=Math.max(1,(w*dpr)|0);
+      this.waveCanvas.height=Math.max(1,(h*dpr)|0);
+      this.waveCtx.setTransform(1,0,0,1,0,0);
+      this.waveCtx.scale(dpr,dpr);
     }
 
     _handleLayoutChange(){
       this._resizeCanvas();
       this._resizeSpectrogram();
-      this._resizeScope();
+      this._resizeWave();
+      this._updateHeaderHeight();
       this._render();
+    }
+
+    _updateHeaderHeight(){
+      const sections=[this.topBar,this.guide,this.specControls,this.footer];
+      const total=sections.reduce((sum,el)=>sum+(el?.offsetHeight||0),0);
+      document.documentElement.style.setProperty('--header-height',`${total}px`);
     }
 
     _bumpSides(d){const cur=parseInt(this.sidesInput.value||this.sides,10), n=Math.max(4,cur+d); this.sidesInput.value=String(n); this._applySides(n)}
@@ -1287,10 +1298,10 @@ this._ridgeHold.set(
     }
 
     _drawOscilloscope(){
-      if(!this.scopeCanvas || !this.scopeCtx) return;
-      const ctx=this.scopeCtx;
-      const w=this.scopeCanvas.clientWidth;
-      const h=this.scopeCanvas.clientHeight;
+      if(!this.waveCanvas || !this.waveCtx) return;
+      const ctx=this.waveCtx;
+      const w=this.waveCanvas.clientWidth;
+      const h=this.waveCanvas.clientHeight;
       if(!(w>0 && h>0)) return;
 
       ctx.clearRect(0,0,w,h);
@@ -1359,9 +1370,9 @@ this._ridgeHold.set(
     }
 
     _drawAudioHUD(){
-      const ctx=this.ctx;
+      const ctx=this.waveCtx;
       if(!ctx || !this.audioMetrics) return;
-      const x=12, y=48, lh=14;
+      const x=12, y=16, lh=14;
       const state=this.audio?.ctx?.state ?? 'suspended';
       const stateLabel=state==="running" ? "Running" : "Suspended";
       const entityK=(this.activeEntityK ?? this.entityIndex ?? 0);
@@ -1600,7 +1611,7 @@ this._ridgeHold.set(
       setBtn(this.specViewOmegaTimeBtn,view==='omega-time');
       setBtn(this.specViewLevelTimeBtn,view==='level-time');
       this._clearSpectrogramReadout();
-      this._renderSpectrogramPanel(0);
+      this._drawSpectrogram(0);
     }
 
     _zoomSpectrogram({omega=null,level=null}={}){
@@ -1610,7 +1621,7 @@ this._ridgeHold.set(
       if(level){
         this.specZoomLevel=clamp(this.specZoomLevel*level,1,8);
       }
-      this._renderSpectrogramPanel(0);
+      this._drawSpectrogram(0);
     }
 
     _resetSpectrogramZoom(){
@@ -1618,7 +1629,7 @@ this._ridgeHold.set(
       this.specZoomLevel=1;
       this.specPanOmega=0;
       this.specPanLevel=0;
-      this._renderSpectrogramPanel(0);
+      this._drawSpectrogram(0);
     }
 
     _clearSpectrogramReadout(){
@@ -1639,6 +1650,17 @@ this._ridgeHold.set(
         this.specReadout.textContent=next;
         this._specLastReadout=next;
       }
+    }
+
+    _drawSpectrogram(dtSec){
+      if(!this.specPanelVisible) return;
+      this._renderSpectrogramPanel(dtSec);
+      this._drawLiveSpectrogramHUD();
+    }
+
+    _drawWaveform(){
+      this._drawOscilloscope();
+      this._drawAudioHUD();
     }
 
     _renderSpectrogramPanel(dtSec){
@@ -2879,15 +2901,16 @@ this._ridgeHold.set(
     _drawLiveSpectrogramHUD(){
       if(!this.liveSpecEnabled || !this.emergentActive) return;
 
-      const ctx=this.ctx;
+      if(!this.specCtx || !this.specCanvas) return;
+      const ctx=this.specCtx;
       const rows=this.liveSpecRows;
       const bins=this.liveSpecBins/2;
 
-      const panelW=Math.min(520,this.canvas.clientWidth*0.45);
-      const panelH=Math.min(300,this.canvas.clientHeight*0.45);
+      const panelW=Math.min(520,this.specCanvas.clientWidth*0.9);
+      const panelH=Math.min(300,this.specCanvas.clientHeight*0.8);
 
       const x0=16;
-      const y0=this.canvas.clientHeight-panelH-16;
+      const y0=this.specCanvas.clientHeight-panelH-16;
 
       // --- background ---
       ctx.save();
@@ -3163,10 +3186,7 @@ this._ridgeHold.set(
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
       }
-      this._drawLiveSpectrogramHUD();
       this._updateAudioTick();
-      this._drawOscilloscope();
-      this._drawAudioHUD();
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
@@ -3322,7 +3342,8 @@ this._ridgeHold.set(
         this._drawFrame(0);
         this._drawnOnce=true;
       }
-      this._renderSpectrogramPanel(dtSec);
+      this._drawSpectrogram(dtSec);
+      this._drawWaveform();
     }
     _exposeFingerprintApi(){
       window.computeEntityFingerprint=(k)=>this.computeEntityFingerprint(k);
