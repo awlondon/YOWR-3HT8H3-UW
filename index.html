@@ -779,8 +779,8 @@ this._ridgeHold.set(
       const gain=this._sliderToGain(Number(this.volumeSlider.value));
       this.audio.setMasterGain(gain);
     }
-    _refreshAudioParams(){
-      if(!this.audioEnabled) return;
+    _refreshAudioParams(force=false){
+      if(!this.audioEnabled && !force) return;
       const params=this._computeAudioWavetable();
       if(params){
         this._audioWavetable=params.wavetable;
@@ -1082,6 +1082,8 @@ this._ridgeHold.set(
       this._updateButtonsEnabled(); this._markActiveLevel();
       this._updateSnapLabel();
       this._updateEntityLabel();
+      this._refreshAudioParams(true);
+      this._drawFrame(0);
     }
 
     _applyAlpha(){const a=parseFloat(this.alphaInput.value); if(!isFinite(a)||a<0||a>1)return; this.alpha=a; this._updatePlot(true)}
