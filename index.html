@@ -114,6 +114,13 @@
             <summary>Diagnostics</summary>
             <div class="meta-popover">
               <div class="code-label" id="graphStats">nodes: — | adj: —</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="status">RMS</span>
+                <div id="rmsTrack" style="width:140px;height:10px;border:1px solid var(--border);border-radius:999px;overflow:hidden;background:#0f0f0f">
+                  <div id="rmsBar" style="height:100%;width:0%"></div>
+                </div>
+                <span class="status" id="rmsText">—</span>
+              </div>
             </div>
           </details>
         </div>
@@ -203,8 +210,8 @@
           <div class="row" style="margin-top:8px;">
             <div class="audio-control">
               <label for="volumeSlider">Volume</label>
-              <input id="volumeSlider" type="range" min="0" max="30" value="12" />
-              <span id="volumeLabel">12%</span>
+              <input id="volumeSlider" type="range" min="0" max="30" value="22" />
+              <span id="volumeLabel">22%</span>
             </div>
           </div>
         </div>
@@ -533,6 +540,10 @@ this._ridgeHold.set(
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
       this.sliceBinInput=document.getElementById('sliceBinInput'); this.toggleCubeSliceBtn=document.getElementById('toggleCubeSlice');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
+      this.rmsBar=document.getElementById('rmsBar');
+      this.rmsText=document.getElementById('rmsText');
+      this._rms=0;
+      this._td=null;
       this.modeIndicator=document.getElementById('modeIndicator');
       this.tabButtons=Array.from(document.querySelectorAll('[data-tab]'));
       this.tabPanels=Array.from(document.querySelectorAll('[data-tab-panel]'));
@@ -759,6 +770,9 @@ this._ridgeHold.set(
       if(!this.audioEnabled) return;
       await this.audio.init();
       await this.audio.resume();
+      if(this.audio.analyser){
+        this._td=new Float32Array(this.audio.analyser.fftSize);
+      }
       this.audio.setEnabled(true);
       this._applyVolumeFromSlider();
       this._refreshAudioParams();
@@ -1250,6 +1264,24 @@ this._ridgeHold.set(
       this.scopeRmsBuf[this.scopeRmsWrite]=this.scopeRMS;
       this.scopeRmsWrite=(this.scopeRmsWrite+1)%this.scopeRmsBuf.length;
       this.scopeClipPeak=clipPeak;
+    }
+
+    _updateRmsMeterFromTimeDomain(samples){
+      let sum=0;
+      for(let i=0;i<samples.length;i++){
+        const x=samples[i];
+        sum+=x*x;
+      }
+      const rms=Math.sqrt(sum/Math.max(1,samples.length));
+      this._rms=this._rms*0.85+rms*0.15;
+
+      const pct=Math.max(0,Math.min(1,this._rms*3.0));
+      if(this.rmsBar){
+        this.rmsBar.style.width=`${(pct*100).toFixed(1)}%`;
+        const css=pct<0.33?'var(--success)':pct<0.66?'var(--warning)':'var(--danger)';
+        this.rmsBar.style.background=css;
+      }
+      if(this.rmsText) this.rmsText.textContent=this._rms.toFixed(3);
     }
 
     _drawOscilloscope(){
@@ -3111,6 +3143,10 @@ this._ridgeHold.set(
       this._drawLiveSpectrogramHUD();
       this._updateAudioTick();
       this._drawOscilloscope();
+      if(this.audio?.analyser && this._td){
+        this.audio.analyser.getFloatTimeDomainData(this._td);
+        this._updateRmsMeterFromTimeDomain(this._td);
+      }
     }
 
     _trianglesExtent(tris){if(!tris||!tris.length)return null; let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity; for(const t of tris){for(const p of t){if(p[0]<xmin)xmin=p[0]; if(p[0]>xmax)xmax=p[0]; if(p[1]<ymin)ymin=p[1]; if(p[1]>ymax)ymax=p[1]}} return [xmin,xmax,ymin,ymax]}
@@ -3279,13 +3315,14 @@ this._ridgeHold.set(
     constructor(){
       this.ctx=null;
       this.node=null;
+      this.analyser=null;
       this.ready=false;
       this.enabled=false;
 
       this.wavetable=new Float32Array(0);
       this.speed=1;
       this.gateThreshold=0.02;
-      this.userVolume=0.08;
+      this.userVolume=0.05;
       this.onMonitor=null;
     }
 
@@ -3297,11 +3334,15 @@ this._ridgeHold.set(
       this.ctx=ctx;
       await ctx.audioWorklet.addModule('hlsf-audio-processor.js');
       const node=new AudioWorkletNode(ctx,'hlsf-audio-processor');
-      node.connect(ctx.destination);
+      const analyser=ctx.createAnalyser();
+      analyser.fftSize=2048;
+      node.connect(analyser);
+      analyser.connect(ctx.destination);
       node.port.onmessage=(event)=>{
         if(this.onMonitor) this.onMonitor(event);
       };
       this.node=node;
+      this.analyser=analyser;
       this.ready=true;
       this._postParams({
         enabled:this.enabled,
