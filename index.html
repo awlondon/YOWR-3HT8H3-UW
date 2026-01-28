@@ -486,6 +486,7 @@ this._ridgeHold.set(
       this.speedPlus=document.getElementById('speedPlus'); this.speedMinus=document.getElementById('speedMinus'); this.toggleRotationBtn=document.getElementById('toggleRotation'); this.toggleEmergentBtn=document.getElementById('toggleEmergent'); this.pauseEmergentBtn=document.getElementById('pauseEmergent');
       this.stepBackBtn=document.getElementById('stepBack'); this.stepForwardBtn=document.getElementById('stepForward');
       this.snapMode=0;
+      this.snapEnabled=false;
       this.toggleSnapBtn=document.getElementById('toggleSnap');
       this.stepBackBtn.addEventListener('click',()=>this._emergentStep(-1)); this.stepForwardBtn.addEventListener('click',()=>this._emergentStep(+1));
       this.zoomInBtn=document.getElementById('zoomIn'); this.zoomOutBtn=document.getElementById('zoomOut'); this.resetViewBtn=document.getElementById('resetView'); this.viewPortalBtn=document.getElementById('viewPortal');
@@ -522,6 +523,7 @@ this._ridgeHold.set(
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
       this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
       this.alpha=0.02; this.rotationSpeed=0.50; this.globalAngle=0;
+      this.lockedAngle=0;
       this.emergentAngle=0; this.rotationActive=false; this.emergentActive=false; this.emergentPaused=false;
       this.entityIndex=0; this.entityAuto=false; this.entityAutoTimer=null; this.entityAutoMs=2500; this.entityLockRotation=false;
       this.activeEntityK=0;
@@ -755,6 +757,7 @@ this._ridgeHold.set(
       this.toggleEmergentBtn.addEventListener('click',()=>this._toggleEmergent());
       this.pauseEmergentBtn.addEventListener('click',()=>this._togglePauseEmergent());
       this.toggleSnapBtn.addEventListener('click',()=>{
+        this.snapEnabled=!this.snapEnabled;
         this._updateSnapLabel();
         this._render();
       });
@@ -2550,6 +2553,7 @@ this._ridgeHold.set(
     }
     _stopRotationsForEntity(){
       if(this.rotationActive||this.emergentActive){
+        this.lockedAngle=this.emergentActive ? this.emergentAngle : this.globalAngle;
         this.rotationActive=false;
         this.emergentActive=false;
         this.emergentPaused=false;
@@ -2618,7 +2622,10 @@ this._ridgeHold.set(
       this.entityLockRotation=!this.entityLockRotation;
       this.entityLockBtn.setAttribute('aria-pressed',String(this.entityLockRotation));
       this.entityLockBtn.textContent=this.entityLockRotation?"Lock Rotation: ON":"Lock Rotation";
-      if(this.entityLockRotation) this._stopRotationsForEntity();
+      if(this.entityLockRotation){
+        this.lockedAngle=this.emergentActive ? this.emergentAngle : this.globalAngle;
+        this._stopRotationsForEntity();
+      }
     }
 
     _worldToScreen([x,y]){const sx=x*(200*this.scale)+this.tx, sy=-y*(200*this.scale)+this.ty; return[sx,sy]}
@@ -2642,14 +2649,17 @@ this._ridgeHold.set(
     _currentColorArray(allTris){const L=Math.max(0,this.levels|0), seed=this.gen.activeSeedTris(), seedCount=seed.length, R=(L===0)?1:this.sides, T=seedCount*R; if(this.edgesOnly||T===0) return new Array(allTris.length).fill(null); const a=this.alpha; if(this.colorMode==='by_level'){const arr=this._paletteByLevel(L,seedCount,a); return allTris.map((_,i)=>arr[i%arr.length])} else {const arr=this._paletteDistinct(seedCount,L,a,R); return allTris.map((_,i)=>arr[i%arr.length])}}
     _lineWidthPx(){return Math.max(.5,2/(this.levels+1))}
     _resolveSnapMode(){
-      if(this.emergentActive) return 2;
+      if(!this.snapEnabled) return 0;
+      if(this.emergentActive || (this.levels%2===1)) return 2;
       return (this.levels%2===0) ? 1 : 2;
     }
     _updateSnapLabel(){
       const mode=this._resolveSnapMode();
-      const label=mode===1 ? 'Snap: 360/n' : mode===2 ? 'Snap: 360/(2n)' : 'Snap: OFF';
-      this.toggleSnapBtn.textContent=label;
-      this.toggleSnapBtn.setAttribute('aria-pressed',String(mode!==0));
+      let label='OFF';
+      if(mode===1) label=`360/${this.sides}`;
+      if(mode===2) label=`360/${2*this.sides}`;
+      this.toggleSnapBtn.textContent=`Snap: ${label}`;
+      this.toggleSnapBtn.setAttribute('aria-pressed',String(this.snapEnabled));
     }
     _snapAngle(theta){
       const mode=this._resolveSnapMode();
@@ -2668,7 +2678,8 @@ this._ridgeHold.set(
       const L=Math.max(0,this.levels|0);
       let drew=false;
       if(this.emergentActive){
-        if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        if(!this.emergentPaused && !this.entityLockRotation) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        if(this.entityLockRotation) this.emergentAngle=this.lockedAngle;
         const angle=this._snapAngle(this.emergentAngle);
         if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
         const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
@@ -2682,12 +2693,14 @@ this._ridgeHold.set(
         drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
-          this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          if(!this.entityLockRotation) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          else this.globalAngle=this.lockedAngle;
           const angle=this._snapAngle(this.globalAngle);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
           if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
         } else {
-          this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          if(!this.entityLockRotation) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
+          else this.globalAngle=this.lockedAngle;
           const angle=this._snapAngle(this.globalAngle);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
@@ -2695,8 +2708,19 @@ this._ridgeHold.set(
         }
       } else {
         const base=this.gen.activeTriangles();
-        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
-        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
+        const lockedAngle=this.entityLockRotation ? this._snapAngle(this.lockedAngle) : 0;
+        if(base&&base.length){
+          const allTris=lockedAngle ? rotateTrianglesAround(base,this.gen.activePivot(),lockedAngle) : base;
+          const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          drew=true;
+        } else {
+          const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
+          if(seed&&seed.length){
+            this._drawDeferred(seed,pivot,lockedAngle);
+            drew=true;
+          }
+        }
       }
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
@@ -2940,19 +2964,34 @@ this._ridgeHold.set(
       if(!mag || !mag.length) return;
 
       let mx=0;
-      for(let i=1;i<mag.length;i++) mx=Math.max(mx,mag[i]);
-      if(mx<1e-6) return;
+      let total=0;
+      for(let i=1;i<mag.length;i++){
+        const v=Math.max(0,mag[i]);
+        mx=Math.max(mx,v);
+        total+=v;
+      }
 
       const t=this.ctx.currentTime;
-      const tau=0.02;
+      const tau=0.03;
       const bins=mag.length;
+      const silent=total<0.01;
+
+      if(silent){
+        const fallbackIdx=Math.max(0,Math.round(this.bands*0.1));
+        for(let i=0;i<this.bands;i++){
+          const target=i===fallbackIdx ? 0.005 : 0.0;
+          this.gains[i].gain.setTargetAtTime(target,t,tau);
+        }
+        this.lastMag=mag;
+        return;
+      }
 
       for(let i=0;i<this.bands;i++){
         const u=i/(this.bands-1);
         const bin=Math.max(1,Math.min(bins-1,Math.round(u*(bins-1))));
-        const v=mag[bin]/mx;
-        const amp=Math.min(1.0,v*v);
-        const gated=amp<0.03?0.0:amp;
+        const v=mx>0 ? (mag[bin]/mx) : 0;
+        const amp=Math.min(1.0,v);
+        const gated=amp<0.01?0.0:amp;
         this.gains[i].gain.setTargetAtTime(gated,t,tau);
       }
 
