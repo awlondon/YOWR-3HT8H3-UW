@@ -16,7 +16,7 @@
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji";}
     .app{height:100vh;width:100vw;overflow:hidden}
-    #mainLayout{display:grid;grid-template-rows:auto minmax(var(--hlsf-min),1fr) auto auto;height:100vh;overflow:hidden;width:100vw}
+    #mainLayout{display:grid;grid-template-rows:auto minmax(60vh,1fr) minmax(140px,220px) minmax(90px,120px);height:100vh;overflow:hidden;width:100vw}
     @supports(height:100dvh){#mainLayout{height:100dvh}}
     #controlsWrap{grid-row:1;display:flex;flex-direction:column;min-height:0}
     #topBar{position:relative;z-index:1000;background:var(--panel);border-bottom:1px solid var(--border);pointer-events:auto}
@@ -75,11 +75,11 @@
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
-    #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:300px;overflow:hidden;background:#000}
+    #hlsfCanvasWrap{position:relative;width:100%;height:100%;min-height:60vh;overflow:hidden;background:#000}
     #hlsfCanvas{display:block;width:100%;height:100%}
-    #spectrogramPanel{overflow:hidden;min-height:140px;max-height:240px;height:clamp(140px,18vh,240px)}
+    #spectrogramPanel{overflow:hidden;min-height:140px;max-height:220px;height:clamp(140px,18vh,220px)}
     #spectrogramPanel canvas{width:100%;height:100%}
-    #oscilloscopePanel{overflow:hidden;min-height:90px;max-height:140px;height:clamp(90px,12vh,140px)}
+    #oscilloscopePanel{overflow:hidden;min-height:90px;max-height:120px;height:clamp(90px,12vh,120px)}
     .hlsf-overlay,
     .spectrogram-overlay,
     .debug-overlay{pointer-events:none}
@@ -614,13 +614,14 @@ this._ridgeHold.set(
       this._omegaLevelPanel=null;
       this._specPanelInfo=null;
       this.specPanelVisible=true;
+      this.oscilloscopeVisible=true;
       this.specZoomOmega=1;
       this.specZoomLevel=1;
       this.specPanOmega=0;
       this.specPanLevel=0;
       this._specLastReadout=null;
       // Live spectrogram (during Emergent)
-      this.liveSpecEnabled=false;
+      this.liveSpecEnabled=true;
       this.liveSpecEntityK=this.entityIndex ?? 0;
       this.liveSpecBins=128;
       this.liveSpecRows=120;
@@ -771,6 +772,9 @@ this._ridgeHold.set(
         this.toggleLiveFftBtn.setAttribute('aria-pressed',String(this.liveSpecEnabled));
         this.toggleLiveFftBtn.textContent=this.liveSpecEnabled?"Live FFT: On":"Live FFT: Off";
       }
+      if(this.audio?.setMonitorEnabled){
+        this.audio.setMonitorEnabled(this.audioEnabled && this.liveSpecEnabled);
+      }
       this._setAudioMode(this.audioEnabled||this.liveSpecEnabled);
       this._updateModeIndicator();
       this._applyPanelLayout();
@@ -824,7 +828,7 @@ this._ridgeHold.set(
     _applyPanelLayout(){
       const hasSpectrogramSession=this.liveSpecEnabled||this._specReplayActive||Boolean(this._specFrames?.length);
       const hasSpectrogram=this.audioEnabled&&this.specPanelVisible&&hasSpectrogramSession;
-      const hasOscilloscope=this.audioEnabled&&hasSpectrogramSession;
+      const hasOscilloscope=this.audioEnabled&&this.oscilloscopeVisible&&hasSpectrogramSession;
       this._updateAnalysisVisibility({hasSpectrogram,hasOscilloscope});
     }
     _applyVolumeFromSlider(){
@@ -873,17 +877,24 @@ this._ridgeHold.set(
       this.audio.setEnabled(true);
       this._updateAudioStatus();
     }
-    async _toggleAudio(){
-      this.audioEnabled=!this.audioEnabled;
+    async setAudioEnabled(on){
+      const next=!!on;
+      if(this.audioEnabled===next) return;
+      this.audioEnabled=next;
       if(this.audioEnabled){
+        this.liveSpecEnabled=true;
         await this._bootAudio();
       } else {
+        this.liveSpecEnabled=false;
         this.audio.setEnabled(false);
       }
       const label=this.audioEnabled?"Audio enabled":"Audio muted";
       this._statusMsg(label);
       this._syncAudioUi();
       this._handleLayoutChange();
+    }
+    async _toggleAudio(){
+      await this.setAudioEnabled(!this.audioEnabled);
     }
     _toggleLiveFft(){
       this.liveSpecEnabled=!this.liveSpecEnabled;
@@ -917,6 +928,7 @@ this._ridgeHold.set(
         this.audioStatusBtn.addEventListener('click',async()=>{
           if(!this.audioEnabled){
             this.audioEnabled=true;
+            this.liveSpecEnabled=true;
             this._syncAudioUi();
           }
           await this._ensureAudioStarted();
@@ -3561,6 +3573,7 @@ this._ridgeHold.set(
       this.userVolume=0.15;
       this.onMonitor=null;
       this.onMetrics=null;
+      this.monitorEnabled=true;
       this._beepTested=false;
       this.legacySource=null;
       this.legacyBuffer=null;
@@ -3614,7 +3627,8 @@ this._ridgeHold.set(
         wavetable:this.wavetable,
         speed:this.speed,
         gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
       });
     }
 
@@ -3623,7 +3637,7 @@ this._ridgeHold.set(
       if(this.ctx.state==="suspended") await this.ctx.resume().catch(()=>{});
     }
 
-    _postParams({enabled,wavetable,speed,gateThreshold,userVolume}){
+    _postParams({enabled,wavetable,speed,gateThreshold,userVolume,monitorEnabled}){
       if(!this.node) return;
       this.node.port.postMessage({
         type:'params',
@@ -3631,7 +3645,8 @@ this._ridgeHold.set(
         wavetable,
         speed,
         gateThreshold,
-        userVolume
+        userVolume,
+        monitor:monitorEnabled
       });
     }
     _startLegacyMonitor(){
@@ -3711,7 +3726,8 @@ this._ridgeHold.set(
         wavetable:this.wavetable,
         speed:this.speed,
         gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
       });
     }
 
@@ -3728,7 +3744,8 @@ this._ridgeHold.set(
         wavetable:this.wavetable,
         speed:this.speed,
         gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
       });
     }
 
@@ -3749,7 +3766,22 @@ this._ridgeHold.set(
         wavetable:this.wavetable,
         speed:this.speed,
         gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
+      });
+    }
+
+    setMonitorEnabled(on){
+      this.monitorEnabled=!!on;
+      if(this.mode==='legacy') return;
+      if(!this.node) return;
+      this._postParams({
+        enabled:this.enabled,
+        wavetable:this.wavetable,
+        speed:this.speed,
+        gateThreshold:this.gateThreshold,
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
       });
     }
 
@@ -3776,7 +3808,8 @@ this._ridgeHold.set(
           wavetable:new Float32Array(0),
           speed:this.speed,
           gateThreshold:this.gateThreshold,
-          userVolume:this.userVolume
+          userVolume:this.userVolume,
+          monitorEnabled:this.monitorEnabled
         });
         return;
       }
@@ -3786,7 +3819,8 @@ this._ridgeHold.set(
         wavetable:this.wavetable,
         speed:this.speed,
         gateThreshold:this.gateThreshold,
-        userVolume:this.userVolume
+        userVolume:this.userVolume,
+        monitorEnabled:this.monitorEnabled
       });
     }
 
