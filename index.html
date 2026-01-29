@@ -90,10 +90,10 @@
     #fftHeader span{letter-spacing:.3px;text-transform:uppercase;color:var(--muted)}
     #fftHeader button{padding:2px 6px;border-radius:6px;font-size:12px}
     #fftPin.active{background:var(--accent);color:#0b0b0b;border-color:var(--accent)}
-    #fftBody{flex:1;overflow:hidden;min-height:120px}
+    #fftBody{flex:1;overflow:hidden}
     #fftStackPanel.collapsed{width:28px}
     #fftStackPanel.collapsed #fftBody{display:none}
-    .fftSlice{display:block;width:100%;height:40px;background:#050505;border-bottom:1px solid #111}
+    .fftSlice{height:40px;margin-bottom:4px;width:100%;display:block}
     #oscilloscopePanel{flex:none;overflow:hidden;min-height:90px;max-height:120px}
     .hlsf-overlay,
     .spectrogram-overlay,
@@ -832,7 +832,7 @@ this._ridgeHold.set(
         this.specCanvas.height=512;
       }
 
-      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._ensureFftSlices(); this._handleLayoutChange();
+      this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._initFftStackPanel(); this._handleLayoutChange();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._updateAudioButton(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
@@ -1003,8 +1003,7 @@ this._ridgeHold.set(
     }
     _applyPanelLayout(){
       const hasSpectrogramSession=(this.liveSpecEnabled&&this.audioEnabled)||this._specReplayActive||Boolean(this._specFrames?.length);
-      const hasFftPanel=this.audioEnabled||this.oscilloscopeVisible||this.liveSpecEnabled||this._specReplayActive;
-      const hasSpectrogram=this.specPanelVisible&&(hasSpectrogramSession||hasFftPanel);
+      const hasSpectrogram=this.specPanelVisible&&hasSpectrogramSession;
       const hasOscilloscope=this.oscilloscopeVisible&&hasSpectrogramSession;
       this._updateAnalysisVisibility({hasSpectrogram,hasOscilloscope});
     }
@@ -1041,7 +1040,6 @@ this._ridgeHold.set(
         this._td=new Float32Array(this.audio.analyser.fftSize);
       }
       this.audio.setEnabled(true);
-      this._ensureFftSlices();
       this._applyVolumeFromSlider();
       this._refreshAudioParams();
       this._updateAudioStatus();
@@ -1063,7 +1061,6 @@ this._ridgeHold.set(
         this.liveSpecEnabled=true;
         this.oscilloscopeVisible=true;
         await this._bootAudio();
-        this._ensureFftSlices();
       } else {
         this.liveSpecEnabled=false;
         this.oscilloscopeVisible=false;
@@ -1082,9 +1079,6 @@ this._ridgeHold.set(
       this._statusMsg(this.oscilloscopeVisible?"Live FFT: Visible":"Live FFT: Hidden");
       if(this.emergentActive && this.liveSpecEnabled){
         this._startSpectrogramRecording();
-      }
-      if(this.oscilloscopeVisible){
-        this._ensureFftSlices();
       }
       this._applyPanelLayout();
       this._render();
@@ -1124,10 +1118,6 @@ this._ridgeHold.set(
         this.fftToggle.onclick=()=>{
           uiState.fft.visible=!uiState.fft.visible;
           this.fftStackPanel.classList.toggle('collapsed',!uiState.fft.visible);
-          if(uiState.fft.visible){
-            this._ensureFftSlices();
-            this._resizeFftSlices();
-          }
         };
       }
       if(this.fftPin){
@@ -1321,7 +1311,6 @@ this._ridgeHold.set(
       this._resizeCanvas();
       this._resizeSpectrogram();
       this._resizeWave();
-      this._resizeFftSlices();
       this._updateHeaderHeight();
       this._render();
     }
@@ -1427,7 +1416,6 @@ this._ridgeHold.set(
       let rmin=Infinity,rmax=0; for(const t of tris){for(const p of t){const d=Math.hypot(p[0]-pivot[0],p[1]-pivot[1]); if(d<rmin)rmin=d; if(d>rmax)rmax=d}}
       if(!isFinite(rmin)||rmin<=1e-9) rmin=Math.max(rmax*0.05,0.005);
       const R=Math.max(rmin*.95,0.005), [px,py]=pivot; this._zoomToRect([px-R,py-R,px+R,py+R]); this._setFocusMode(true);
-      this._ensureFftSlices();
       if(render) this._render();
       if(refreshAudio) this._refreshAudioParams();
       this._updateModeIndicator();
@@ -1870,42 +1858,18 @@ this._ridgeHold.set(
       if(prevSample!==best) this._render();
     }
 
-    _ensureFftSlices(count=6){
+    _initFftStackPanel(){
       if(!this.fftStackPanel || !this.fftBody) return;
-      console.assert(
-        this.fftBody && this.fftBody.offsetWidth>0,
-        'FFT body missing or zero-width'
-      );
+      const sliceCount=4;
       this._fftSlices=[];
       this.fftBody.innerHTML='';
-      for(let i=0;i<count;i++){
+      for(let i=0;i<sliceCount;i++){
         const canvas=document.createElement('canvas');
         canvas.className='fftSlice';
         canvas.dataset.slice=String(i);
-        canvas.width=280;
-        canvas.height=40;
         this.fftBody.appendChild(canvas);
         this._fftSlices.push(canvas);
       }
-      this._resizeFftSlices();
-    }
-
-    _resizeFftSlices(){
-      if(!this.fftBody) return;
-      const slices=this.fftBody.querySelectorAll('.fftSlice');
-      slices.forEach(canvas=>{
-        const dpr=window.devicePixelRatio||1;
-        const w=canvas.clientWidth|0;
-        const h=canvas.clientHeight|0;
-        if(w && h){
-          canvas.width=w*dpr;
-          canvas.height=h*dpr;
-          const ctx=canvas.getContext('2d');
-          if(ctx){
-            ctx.setTransform(dpr,0,0,dpr,0,0);
-          }
-        }
-      });
     }
 
     _collectFftSlices(){
@@ -1928,7 +1892,7 @@ this._ridgeHold.set(
 
     _renderFftStackPanel(){
       if(!this.fftStackPanel) return;
-      if(!this._fftSlices.length) this._ensureFftSlices();
+      if(!this._fftSlices.length) this._initFftStackPanel();
       const slices=this._collectFftSlices();
       for(let i=0;i<this._fftSlices.length;i++){
         const canvas=this._fftSlices[i];
@@ -1952,8 +1916,6 @@ this._ridgeHold.set(
       ctx.clearRect(0,0,w,h);
       ctx.fillStyle='#05060a';
       ctx.fillRect(0,0,w,h);
-      ctx.fillStyle='rgba(0,255,0,0.8)';
-      ctx.fillRect(0,0,4,4);
       if(!slice || !slice.data || slice.data.length<2){
         ctx.fillStyle='rgba(255,255,255,0.35)';
         ctx.font='10px ui-monospace, Menlo, Consolas, monospace';
@@ -2035,11 +1997,10 @@ this._ridgeHold.set(
     }
 
     _drawSpectrogram(dtSec){
-      if(this.specPanelVisible){
-        this._renderSpectrogramPanel(dtSec);
-        this._drawSpectralMarkersOverlay();
-        this._drawLiveSpectrogramHUD();
-      }
+      if(!this.specPanelVisible) return;
+      this._renderSpectrogramPanel(dtSec);
+      this._drawSpectralMarkersOverlay();
+      this._drawLiveSpectrogramHUD();
       this._renderFftStackPanel();
     }
 
