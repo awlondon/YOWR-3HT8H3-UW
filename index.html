@@ -292,38 +292,48 @@
         </div>
       </div>
     </div>
-    <input id="specFileInput" type="file" accept="application/json" style="display:none" />
 
-    <section class="guide" aria-label="Ridge tuning guide">
-      <details>
-        <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
-        <h4>1) Ridge selectivity (Top-K)</h4>
-        <ul>
-          <li><code>this._ridgeTopK = 2</code> → very tonal, sparse</li>
-          <li><code>this._ridgeTopK = 3</code> → balanced (recommended)</li>
-          <li><code>this._ridgeTopK = 5</code> → dense, chord-like</li>
-        </ul>
-        <div class="note">Rule: low sides / low levels → smaller K. High sides / emergent rotation → larger K.</div>
+    <div class="group" style="grid-column: span 3;">
+      <h3>Audio</h3>
+      <div class="row">
+        <button id="toggleAudio" class="btn-warning" aria-pressed="false">Audio: OFF</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <span class="status">Shortcut: <strong>M</strong></span>
+      </div>
+    </div>
+  </div>
 
-        <h4>2) Persistence (decay)</h4>
-        <ul>
-          <li><code>this._ridgeDecay = 0.90</code> → fast fade (percussive)</li>
-          <li><code>this._ridgeDecay = 0.94</code> → musical sustain</li>
-          <li><code>this._ridgeDecay = 0.97</code> → drone / structural memory</li>
-        </ul>
-        <div class="note">Interpretation: &lt; 0.9 = noisy, 0.97 = everything sticks forever. Sweet spot: 0.92–0.95.</div>
+  <section class="guide" aria-label="Ridge tuning guide">
+    <details open>
+      <summary>Ridge Tuning Guide <span>What to change, why it matters</span></summary>
+      <h4>1) Ridge selectivity (Top-K)</h4>
+      <ul>
+        <li><code>this._ridgeTopK = 2</code> → very tonal, sparse</li>
+        <li><code>this._ridgeTopK = 3</code> → balanced (recommended)</li>
+        <li><code>this._ridgeTopK = 5</code> → dense, chord-like</li>
+      </ul>
+      <div class="note">Rule: low sides / low levels → smaller K. High sides / emergent rotation → larger K.</div>
 
-        <h4>3) Reinforcement strength</h4>
-        <ul>
-          <li><code>this._ridgeBoost = 0.25</code> → conservative</li>
-          <li><code>this._ridgeBoost = 0.35</code> → default</li>
-          <li><code>this._ridgeBoost = 0.50</code> → aggressive locking</li>
-        </ul>
-        <div class="note">If ridges “snap” too hard → lower boost. If ridges never form → raise boost.</div>
+      <h4>2) Persistence (decay)</h4>
+      <ul>
+        <li><code>this._ridgeDecay = 0.90</code> → fast fade (percussive)</li>
+        <li><code>this._ridgeDecay = 0.94</code> → musical sustain</li>
+        <li><code>this._ridgeDecay = 0.97</code> → drone / structural memory</li>
+      </ul>
+      <div class="note">Interpretation: &lt; 0.9 = noisy, 0.97 = everything sticks forever. Sweet spot: 0.92–0.95.</div>
 
-        <h4>4) Optional: frequency-weighted bias (recommended)</h4>
-        <p class="note">Higher ω bins are noisier. Bias against them so low/mid harmonics dominate naturally.</p>
-        <pre class="code-label">const weight = 1 - (bin / mag.length);
+      <h4>3) Reinforcement strength</h4>
+      <ul>
+        <li><code>this._ridgeBoost = 0.25</code> → conservative</li>
+        <li><code>this._ridgeBoost = 0.35</code> → default</li>
+        <li><code>this._ridgeBoost = 0.50</code> → aggressive locking</li>
+      </ul>
+      <div class="note">If ridges “snap” too hard → lower boost. If ridges never form → raise boost.</div>
+
+      <h4>4) Optional: frequency-weighted bias (recommended)</h4>
+      <p class="note">Higher ω bins are noisier. Bias against them so low/mid harmonics dominate naturally.</p>
+      <pre class="code-label">const weight = 1 - (bin / mag.length);
 this._ridgeHold.set(
   bin,
   Math.min(1, cur + val * weight * this._ridgeBoost)
@@ -569,6 +579,99 @@ this._ridgeHold.set(
     activePivot(){const L=Math.max(0,this.levels|0);return(L<=1?this.center:(this.level_symmetry[L]??this.center))}
   }
 
+  class AudioEngine {
+    constructor(){
+      this.ctx=null;
+      this.master=null;
+      this.noise=null;
+      this.filters=[];
+      this.gains=[];
+      this.enabled=false;
+      this.bands=32;
+      this.fMin=80;
+      this.fMax=6000;
+      this.lastMag=null;
+    }
+
+    async init(){
+      if(this.ctx) return;
+      const Ctx=window.AudioContext||window.webkitAudioContext;
+      if(!Ctx) return;
+      const ctx=new Ctx();
+      this.ctx=ctx;
+
+      const master=ctx.createGain();
+      master.gain.value=0.0;
+      master.connect(ctx.destination);
+      this.master=master;
+
+      const bufSize=2*ctx.sampleRate;
+      const buf=ctx.createBuffer(1,bufSize,ctx.sampleRate);
+      const data=buf.getChannelData(0);
+      for(let i=0;i<bufSize;i++) data[i]=(Math.random()*2-1);
+      const src=ctx.createBufferSource();
+      src.buffer=buf;
+      src.loop=true;
+
+      const logMin=Math.log(this.fMin);
+      const logMax=Math.log(this.fMax);
+      for(let i=0;i<this.bands;i++){
+        const u=i/(this.bands-1);
+        const f=Math.exp(logMin+(logMax-logMin)*u);
+
+        const bp=ctx.createBiquadFilter();
+        bp.type="bandpass";
+        bp.frequency.value=f;
+        bp.Q.value=10;
+
+        const g=ctx.createGain();
+        g.gain.value=0.0;
+
+        src.connect(bp);
+        bp.connect(g);
+        g.connect(master);
+
+        this.filters.push(bp);
+        this.gains.push(g);
+      }
+
+      src.start();
+      this.noise=src;
+    }
+
+    setEnabled(on){
+      if(!this.ctx) return;
+      this.enabled=!!on;
+      const t=this.ctx.currentTime;
+      const target=this.enabled?0.9:0.0;
+      this.master.gain.setTargetAtTime(target,t,0.02);
+    }
+
+    updateFromMagnitude(mag){
+      if(!this.ctx||!this.enabled){ this.lastMag=mag; return; }
+      if(!mag||!mag.length) return;
+
+      let mx=0;
+      for(let i=1;i<mag.length;i++) mx=Math.max(mx,mag[i]);
+      if(mx<1e-6) return;
+
+      const t=this.ctx.currentTime;
+      const tau=0.02;
+      const bins=mag.length;
+
+      for(let i=0;i<this.bands;i++){
+        const u=i/(this.bands-1);
+        const bin=Math.max(1,Math.min(bins-1,Math.round(u*(bins-1))));
+        const v=mag[bin]/mx;
+        const amp=Math.min(1.0,v*v);
+        const gated=amp<0.03?0.0:amp;
+        this.gains[i].gain.setTargetAtTime(gated,t,tau);
+      }
+
+      this.lastMag=mag;
+    }
+  }
+
   class App{
     constructor(){
       this.canvas=document.getElementById('hlsfCanvas');
@@ -598,6 +701,7 @@ this._ridgeHold.set(
       this.volumeSlider=document.getElementById('volumeSlider');
       this.exportSpecBtn=document.getElementById('exportSpec'); this.importSpecBtn=document.getElementById('importSpec'); this.replaySpecBtn=document.getElementById('replaySpec');
       this.toggleSpecPanelBtn=document.getElementById('toggleSpecPanel');
+      this.toggleAudioBtn=document.getElementById('toggleAudio');
       this.specInfoEl=document.getElementById('specInfo'); this.specFileInput=document.getElementById('specFileInput');
       this.sliceBinInput=document.getElementById('sliceBinInput'); this.toggleCubeSliceBtn=document.getElementById('toggleCubeSlice');
       this.downloadPngBtn=document.getElementById('downloadPng'); this.statusEl=document.getElementById('status'); this.codeLabel=document.getElementById('codeLabel'); this.graphStats=document.getElementById('graphStats');
@@ -713,38 +817,12 @@ this._ridgeHold.set(
       this._entityFFT=null;
       this._hudWarning=null;
       this.canvasFocused=false;
-      this.activeIso={level:this.levels,triId:-1,verticesWorld:[[0,0],[0,0],[0,0]],centerWorld:[0,0],boundsWorld:{min:[0,0],max:[0,0]},edgeListWorld:[[[0,0],[0,0]],[[0,0],[0,0]],[[0,0],[0,0]]]};
-      this._isoBoundarySamples=[];
-      this._isoSpectralMapping=null;
-      this._isoHoverSample=null;
-      this._spectralMarkerHoverBin=null;
-      this.spectralMarkersEnabled=false;
-      this.spectralMarkersAuto=true;
-      // --- Audio (view-updated wavetable) ---
-      this.audioEnabled=true;         // start enabled for default audio playback
-      this.audioMode='legacy';
-      this.audio=new AudioEngine({mode:this.audioMode});
-      this.audio.onMonitor=(event)=>this._handleMonitorFrame(event?.data);
-      this.audio.onMetrics=(event)=>this._handleAudioMetrics(event?.data);
-      this._audioEveryMs=50;
+      // --- Audio (view-dependent synthesis) ---
+      this.audio=new AudioEngine();
+      this.audioEnabled=false;
+      this._audioEveryMs=60;
       this._audioLastTs=0;
-      this._audioWavetableSize=512;
-      this._audioBaseSpeed=0.85;
-      this._audioSpeedGamma=1.2;
-      this._audioGateThreshold=0.02;
-      this._audioWavetable=null;
-      this._audioSpeed=1;
       this._lastAudioMag=null;
-      this._audioStatusHooked=false;
-      this._volumeSendRaf=null;
-      this._pendingVolume=null;
-      this._fftSlices=[];
-      if(this.fftStackPanel){
-        this.fftStackPanel.classList.toggle('collapsed',!uiState.fft.visible);
-      }
-      if(this.fftPin){
-        this.fftPin.classList.toggle('active',uiState.fft.pinned);
-      }
 
       this.sidesInput.value=String(this.sides);
       if (this.speedInput) this.speedInput.value = this.rotationSpeed.toFixed(3);
@@ -757,11 +835,7 @@ this._ridgeHold.set(
       this._buildLevelButtons(); this._initTabs(); this._bindEvents(); this._ensureFftSlices(); this._handleLayoutChange();
       this._exposeFingerprintApi();
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
-      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
-      this._syncAudioUi();
-      this._syncSpectralMarkersToggle();
-      this._updateAudioStatus();
-      this._applyVolumeFromSlider();
+      this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._updateAudioButton(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._loop();
     }
 
@@ -1024,24 +1098,7 @@ this._ridgeHold.set(
     }
 
     _bindEvents(){
-      const kickAudio=()=>{
-        this._ensureAudioStarted();
-        window.removeEventListener('pointerdown',kickAudio,{capture:true});
-      };
-      window.addEventListener('pointerdown',kickAudio,{once:true,capture:true});
-      window.addEventListener('keydown',kickAudio,{once:true,capture:true});
-      if(this.audioStatusBtn){
-        this.audioStatusBtn.addEventListener('click',async()=>{
-          if(!this.audioEnabled){
-            this.audioEnabled=true;
-            this.liveSpecEnabled=true;
-            this.oscilloscopeVisible=true;
-            this._syncAudioUi();
-          }
-          await this._ensureAudioStarted();
-        });
-      }
-      window.addEventListener('resize',()=>this._handleLayoutChange(),{passive:true});
+      window.addEventListener('resize',()=>{this._resizeCanvas();this._render()},{passive:true});
       this.nMinus.addEventListener('click',()=>this._bumpSides(-1));
       this.nPlus.addEventListener('click',()=>this._bumpSides(+1));
       this.updateBtn.addEventListener('click',()=>this._applySidesFromInput());
@@ -1114,6 +1171,9 @@ this._ridgeHold.set(
       this.exportSpecBtn.addEventListener('click',()=>this.exportSpectrogramSession());
       this.importSpecBtn.addEventListener('click',()=>this._triggerSpecImport());
       this.replaySpecBtn.addEventListener('click',()=>this.replaySpectrogramSession());
+      if(this.toggleAudioBtn){
+        this.toggleAudioBtn.addEventListener('click',()=>this._toggleAudio());
+      }
       if(this.toggleSpecPanelBtn){
         this.toggleSpecPanelBtn.addEventListener('click',()=>this._toggleSpecPanel());
       }
@@ -1548,269 +1608,27 @@ this._ridgeHold.set(
       this.specInfoEl.textContent=`Frames: ${this._specFrames.length} | bins=${bins}`;
     }
 
-    _visibleTris(){
-      const base=this.gen.activeTriangles();
-      if(!base||!base.length) return null;
-
-      const [xmin,ymin,xmax,ymax]=this._worldViewRect();
-      const out=[];
-      for(const tri of base){
-        const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
-        const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
-        if(cx>=xmin && cx<=xmax && cy>=ymin && cy<=ymax) out.push(tri);
+    async _toggleAudio(){
+      if(!this.audio.ctx){
+        await this.audio.init();
       }
-      return out.length ? out : null;
+      if(!this.audio.ctx){
+        this._statusMsg("WebAudio not supported.");
+        return;
+      }
+      if(this.audio.ctx.state==="suspended") await this.audio.ctx.resume();
+      this.audioEnabled=!this.audioEnabled;
+      this.audio.setEnabled(this.audioEnabled);
+      this._updateAudioButton();
+      this._statusMsg(this.audioEnabled?"Audio: ON":"Audio: OFF");
     }
 
-    _handleMonitorFrame(m){
-      if(!m || m.type !== 'monitor') return;
-      const w=m.wave;
-      if(!w || !w.length) return;
-      let clipPeak=0;
-      for(let i=0;i<w.length;i++){
-        const sample=w[i];
-        this.scopeBuf[this.scopeWrite]=sample;
-        this.scopeWrite=(this.scopeWrite+1)%this.scopeBuf.length;
-        clipPeak=Math.max(clipPeak,Math.abs(sample));
-      }
-      this.scopeRMS=m.rms || 0;
-      this.scopeGated=!!m.gated;
-      this.scopeRmsBuf[this.scopeRmsWrite]=this.scopeRMS;
-      this.scopeRmsWrite=(this.scopeRmsWrite+1)%this.scopeRmsBuf.length;
-      this.scopeClipPeak=clipPeak;
-    }
-
-    _handleAudioMetrics(m){
-      if(!m || m.type !== 'audio-metrics') return;
-      if(!this.audioMetrics) return;
-      this.audioMetrics.rms=Number.isFinite(m.rms)?m.rms:0;
-      this.audioMetrics.gain=Number.isFinite(m.gain)?m.gain:0;
-      this.audioMetrics.audible=!!m.audible;
-    }
-
-    _drawOscilloscope(){
-      if(!this.waveCanvas || !this.waveCtx) return;
-      const ctx=this.waveCtx;
-      const w=this.waveCanvas.clientWidth;
-      const h=this.waveCanvas.clientHeight;
-      if(!(w>0 && h>0)) return;
-
-      ctx.clearRect(0,0,w,h);
-      ctx.fillStyle='#000';
-      ctx.fillRect(0,0,w,h);
-
-      ctx.strokeStyle='#333';
-      ctx.lineWidth=1;
-      ctx.beginPath();
-      ctx.moveTo(0,h/2);
-      ctx.lineTo(w,h/2);
-      ctx.stroke();
-
-      ctx.strokeStyle='#441111';
-      ctx.beginPath();
-      ctx.moveTo(0,0);
-      ctx.lineTo(w,0);
-      ctx.moveTo(0,h);
-      ctx.lineTo(w,h);
-      ctx.stroke();
-
-      ctx.strokeStyle=this.scopeGated ? '#555' : '#0f0';
-      ctx.lineWidth=1;
-      ctx.beginPath();
-      const N=this.scopeBuf.length;
-      for(let i=0;i<N;i++){
-        const idx=(this.scopeWrite+i)%N;
-        const x=(i/(N-1))*w;
-        const y=(h/2)-this.scopeBuf[idx]*(h*0.5);
-        if(i===0) ctx.moveTo(x,y);
-        else ctx.lineTo(x,y);
-      }
-      ctx.stroke();
-
-      const rmsH=Math.min(32,h*0.25);
-      const rmsTop=h-rmsH;
-      ctx.strokeStyle='#224';
-      ctx.beginPath();
-      ctx.moveTo(0,rmsTop);
-      ctx.lineTo(w,rmsTop);
-      ctx.stroke();
-
-      ctx.strokeStyle='#6cf';
-      ctx.beginPath();
-      const R=this.scopeRmsBuf.length;
-      for(let i=0;i<R;i++){
-        const idx=(this.scopeRmsWrite+i)%R;
-        const v=Math.min(1,Math.max(0,this.scopeRmsBuf[idx]));
-        const x=(i/(R-1))*w;
-        const y=(rmsTop+rmsH)-(v*rmsH);
-        if(i===0) ctx.moveTo(x,y);
-        else ctx.lineTo(x,y);
-      }
-      ctx.stroke();
-
-      const clipActive=this.scopeClipPeak>1;
-      ctx.fillStyle='#ccc';
-      ctx.font='11px ui-monospace';
-      const clipLabel=clipActive?' | CLIP':'';
-      ctx.fillText(
-        `RMS: ${this.scopeRMS.toFixed(4)}  |  ${this.scopeGated ? 'GATED' : 'ACTIVE'}${clipLabel}`,
-        8, 14
-      );
-      ctx.fillStyle='#888';
-      ctx.fillText('RMS trace',8,rmsTop+14);
-    }
-
-    _drawAudioHUD(){
-      const ctx=this.waveCtx;
-      if(!ctx || !this.audioMetrics) return;
-      const x=12, y=16, lh=14;
-      const state=this.audio?.ctx?.state ?? 'suspended';
-      const stateLabel=state==="running" ? "Running" : "Suspended";
-      const entityK=(this.activeEntityK ?? this.entityIndex ?? 0);
-      ctx.save();
-      ctx.globalAlpha=0.9;
-      ctx.fillStyle=this.whiteBg ? '#000' : '#fff';
-      ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
-      ctx.fillText('Audio', x, y);
-      ctx.fillText(`RMS: ${this.audioMetrics.rms.toFixed(5)}`, x, y+lh);
-      ctx.fillText(`Gain: ${this.audioMetrics.gain.toFixed(4)}`, x, y+2*lh);
-      ctx.fillText(`Audible: ${this.audioMetrics.audible}`, x, y+3*lh);
-      ctx.fillText(`Zoom: ${this.scale.toFixed(2)}`, x, y+4*lh);
-      ctx.fillText(`k/L: ${entityK}/${this.levels}`, x, y+5*lh);
-      ctx.fillText(`Audio: ${stateLabel}`, x, y+6*lh);
-      ctx.restore();
-    }
-
-    _computeAudioWavetable(){
-      const tris=this.gen.activeTriangles();
-      if(!tris||!tris.length) return null;
-
-      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
-      const view=this._worldViewRect();
-      const bounds=this._wedgeRadialBounds(k,view);
-      if(!bounds) return null;
-
-      const {r0,r1}=bounds;
-      const span=r1-r0;
-      if(!(span>1e-6)) return null;
-
-      const N=this._audioWavetableSize;
-      const signal=new Float32Array(N);
-      const dr=span/N;
-      const [xmin,ymin,xmax,ymax]=view;
-      const pivot=this.gen.activePivot();
-      const theta0=canonicalStartAngle(this.sides);
-      const dTheta=TAU/this.sides;
-      const a0=theta0+k*dTheta;
-      const a1=a0+dTheta;
-
-      let maxArea=0;
-      const samples=[];
-      for(const tri of tris){
-        const [cx,cy]=this._triangleCentroid(tri);
-        if(cx<xmin || cx>xmax || cy<ymin || cy>ymax) continue;
-        let ang=Math.atan2(cy-pivot[1],cx-pivot[0]);
-        if(ang<0) ang+=TAU;
-        if(!this._angleInWedge(ang,a0,a1)) continue;
-        const r=Math.hypot(cx-pivot[0],cy-pivot[1]);
-        if(r<r0 || r>r1) continue;
-        const area=this._triangleArea(tri);
-        maxArea=Math.max(maxArea,area);
-        samples.push({r,area});
-      }
-
-      if(!samples.length) return null;
-      const areaNorm=maxArea>0?maxArea:1;
-      for(const {r,area} of samples){
-        const idx=Math.floor((r-r0)/dr);
-        if(idx<0||idx>=N) continue;
-        const weight=Math.sqrt(area/areaNorm);
-        signal[idx]+=weight;
-      }
-
-      let mean=0;
-      for(let i=0;i<N;i++) mean+=signal[i];
-      mean/=N;
-      let varSum=0;
-      for(let i=0;i<N;i++){
-        const d=signal[i]-mean;
-        varSum+=d*d;
-      }
-      const std=Math.sqrt(varSum/N);
-      if(!(std>1e-6)) return null;
-
-      const wavetable=new Float32Array(N);
-      const binNorm=1/Math.sqrt(N);
-      for(let i=0;i<N;i++){
-        const v=(signal[i]-mean)/(std+1e-6);
-        wavetable[i]=clamp(v,-3,3)/3*binNorm;
-      }
-
-      const [px,py]=pivot;
-      const cx=(xmin+xmax)/2;
-      const cy=(ymin+ymax)/2;
-      let ang=Math.atan2(cy-py,cx-px);
-      if(ang<0) ang+=TAU;
-      let aa0=a0;
-      let aa1=a1;
-      if(aa1<aa0) aa1+=TAU;
-      let angAdj=ang;
-      if(angAdj<aa0) angAdj+=TAU;
-      const cxNorm=clamp((angAdj-aa0)/(aa1-aa0),0,1);
-      const speed=this._audioBaseSpeed*Math.pow(2,this._audioSpeedGamma*(cxNorm-0.5));
-
-      return {
-        wavetable,
-        speed,
-        gateThreshold:this._audioGateThreshold,
-        enabled:true
-      };
-    }
-
-    _computeSpectrumForAudio({bins=64}={}){
-      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
-      const resolvedBins=this._ensureFftBins(bins*2,"Audio FFT");
-
-      const vTris=this._visibleTris();
-      if(vTris){
-        const sig=this._computeEntitySignalFromTris(vTris,k,resolvedBins);
-        if(sig){
-          const mag=this._fftMagnitude(sig);
-          if(mag&&mag.length) return mag;
-        }
-      }
-
-      const sigB=this._computeEntitySignal(k,resolvedBins);
-      if(sigB){
-        const magB=this._fftMagnitude(sigB);
-        if(magB&&magB.length) return magB;
-      }
-
-      const sigC=this._computeEntitySignal(0,resolvedBins);
-      if(sigC){
-        const magC=this._fftMagnitude(sigC);
-        if(magC&&magC.length) return magC;
-      }
-
-      return this._lastAudioMag ?? null;
-    }
-
-    _updateAudioTick(){
-      const now=performance.now();
-      if(now-this._audioLastTs<this._audioEveryMs) return;
-      this._audioLastTs=now;
-
-      if(this.audioEnabled){
-        const params=this._computeAudioWavetable();
-        if(params){
-          this._audioWavetable=params.wavetable;
-          this._audioSpeed=params.speed;
-          this.audio.updateFromWavetable(params);
-        } else {
-          this._audioWavetable=null;
-          this.audio.updateFromWavetable({wavetable:new Float32Array(0),speed:this._audioSpeed});
-        }
-      }
+    _updateAudioButton(){
+      if(!this.toggleAudioBtn) return;
+      this.toggleAudioBtn.setAttribute('aria-pressed',String(this.audioEnabled));
+      this.toggleAudioBtn.textContent=this.audioEnabled?"Audio: ON":"Audio: OFF";
+      this.toggleAudioBtn.classList.toggle('btn-warning',!this.audioEnabled);
+      this.toggleAudioBtn.classList.toggle('btn-success',this.audioEnabled);
     }
 
     analysisTick(dtSec){
@@ -2508,59 +2326,17 @@ this._ridgeHold.set(
       const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
       return (cx>=xmin&&cx<=xmax&&cy>=ymin&&cy<=ymax) ? 1 : 0;
     }
-    _updateActiveIso(tris){
-      const level=Math.max(0,this.levels|0);
-      if(!tris||!tris.length){
-        this.activeIso={
-          level,
-          triId:-1,
-          verticesWorld:[[0,0],[0,0],[0,0]],
-          centerWorld:[0,0],
-          boundsWorld:{min:[0,0],max:[0,0]},
-          edgeListWorld:[[[0,0],[0,0]],[[0,0],[0,0]],[[0,0],[0,0]]]
-        };
-        return;
-      }
-      const view=this._worldViewRect();
-      const center=this._viewCenterWorld();
-      let bestIndex=0;
-      let bestScore=Infinity;
-      let bestInside=false;
-      for(let i=0;i<tris.length;i++){
-        const tri=tris[i];
+    _visibleTris(){
+      const base=this.gen.activeTriangles();
+      if(!base||!base.length) return null;
+      const [xmin,ymin,xmax,ymax]=this._worldViewRect();
+      const out=[];
+      for(const tri of base){
         const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
         const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
-        const inside=cx>=view[0]&&cx<=view[2]&&cy>=view[1]&&cy<=view[3];
-        const dist=Math.hypot(cx-center[0],cy-center[1]);
-        if(inside && !bestInside){
-          bestInside=true;
-          bestIndex=i;
-          bestScore=dist;
-          continue;
-        }
-        if(inside===bestInside && dist<bestScore){
-          bestIndex=i;
-          bestScore=dist;
-        }
+        if(cx>=xmin&&cx<=xmax&&cy>=ymin&&cy<=ymax) out.push(tri);
       }
-      const tri=tris[bestIndex];
-      const verticesWorld=tri.map(p=>p.slice());
-      const centerWorld=this._triangleCentroid(verticesWorld);
-      let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
-      for(const [x,y] of verticesWorld){
-        xmin=Math.min(xmin,x);
-        xmax=Math.max(xmax,x);
-        ymin=Math.min(ymin,y);
-        ymax=Math.max(ymax,y);
-      }
-      this.activeIso={
-        level,
-        triId:bestIndex,
-        verticesWorld,
-        centerWorld,
-        boundsWorld:{min:[xmin,ymin],max:[xmax,ymax]},
-        edgeListWorld:[[verticesWorld[0],verticesWorld[1]],[verticesWorld[1],verticesWorld[2]],[verticesWorld[2],verticesWorld[0]]]
-      };
+      return out.length?out:null;
     }
     _levelWeight(level){
       return Math.pow(0.78, level);
@@ -3575,6 +3351,33 @@ this._ridgeHold.set(
       }
       return null;
     }
+    _computeSpectrumForAudio({bins=64}={}){
+      const resolvedBins=this._ensureFftBins(bins*2,"Audio FFT");
+      const k=((this.entityIndex%this.sides)+this.sides)%this.sides;
+
+      const vTris=this._visibleTris();
+      if(vTris){
+        const sig=this._computeEntitySignalFromTris(vTris,k,resolvedBins);
+        if(sig){
+          const mag=this._fftMagnitude(sig);
+          if(mag&&mag.length) return mag;
+        }
+      }
+
+      const sigB=this._computeEntitySignal(k,resolvedBins);
+      if(sigB){
+        const magB=this._fftMagnitude(sigB);
+        if(magB&&magB.length) return magB;
+      }
+
+      const sigC=this._computeEntitySignal(0,resolvedBins);
+      if(sigC){
+        const magC=this._fftMagnitude(sigC);
+        if(magC&&magC.length) return magC;
+      }
+
+      return this._lastAudioMag??null;
+    }
     _fftMagnitude(signal){
       const N=signal.length;
       if(!this._isPowerOfTwo(N)){
@@ -4037,81 +3840,37 @@ this._ridgeHold.set(
       let drew=false;
       let renderTris=null;
       if(this.emergentActive){
-        if(!this.emergentPaused && !this.rotationLocked) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
-        const angleRaw=this.emergentAngle;
-        const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
-        if(this.gen.level_tris[L]===null){
-          this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels.");
-          this.emergentActive=false;
-          this.emergentPaused=false;
-          this.snapMode=0;
-          this.toggleEmergentBtn.textContent="Emergent Rotation";
-          this.pauseEmergentBtn.disabled=true;
-          this.pauseEmergentBtn.textContent="Pause Emergent";
-          this._updateButtonsEnabled();
-          this._updateModeIndicator();
-          const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){
-            this._drawDeferred(seed,pivot,angle);
-            renderTris=this._approximateDeferredTris(seed,pivot,angle);
-            drew=true;
-          }
-        } else {
-          const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
-          const rotated=new Array(seed.length);
-          for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
-          let allTris;
-          if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
-          const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
-          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-          this._updateLiveSpectrogram(allTris,dtSec);
-          renderTris=allTris;
-          drew=true;
-        }
+        if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
+        const angle=this._snapAngle(this.emergentAngle);
+        if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
+        const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
+        const rotated=new Array(seed.length);
+        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
+        let allTris;
+        if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
+        const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+        this._updateLiveSpectrogram(allTris,dtSec);
+        drew=true;
       } else if(this.rotationActive){
         if(this.gen.level_tris[L]===null){
           if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angleRaw=this.globalAngle;
           const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){
-            this._drawDeferred(seed,pivot,angle);
-            renderTris=this._approximateDeferredTris(seed,pivot,angle);
-            drew=true;
-          }
+          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
         } else {
           if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angleRaw=this.globalAngle;
           const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-          renderTris=allTris;
           drew=true;
         }
       } else {
         const base=this.gen.activeTriangles();
-        const lockedAngle=this.rotationLocked ? this.lockedAngle : 0;
-        if(base&&base.length){
-          const allTris=lockedAngle ? rotateTrianglesAround(base,this.gen.activePivot(),lockedAngle) : base;
-          const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
-          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-          renderTris=allTris;
-          drew=true;
-        } else {
-          const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){
-            this._drawDeferred(seed,pivot,lockedAngle);
-            renderTris=this._approximateDeferredTris(seed,pivot,lockedAngle);
-            drew=true;
-          }
-        }
-      }
-      if(drew){
-        this._updateActiveIso(renderTris);
-        const fftData=this._resolveMarkerFftData();
-        this._isoSpectralMapping=this._computeIsoSpectralMapping(this.activeIso,fftData);
-        this._isoBoundarySamples=this._isoSpectralMapping?.samples ?? [];
-        this._drawIsoBoundaryOverlay();
+        if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
+        else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
       }
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
@@ -4275,12 +4034,26 @@ this._ridgeHold.set(
       const warningStr=warningActive?` | ⚠ ${this._hudWarning.msg}`:'';
       this._statusMsg(`Sides: ${this.sides} | Levels: ${this.levels} | Alpha: ${this.alpha.toFixed(3)} | Rotation Speed: ${this.rotationSpeed.toFixed(3)}${fpsStr}${warningStr}`);
     }
+    _updateAudioTick(){
+      if(!this.audioEnabled) return;
+      const now=performance.now();
+      if(now-this._audioLastTs<this._audioEveryMs) return;
+      this._audioLastTs=now;
+      const mag=this._computeSpectrumForAudio({bins:64});
+      if(mag){
+        this._lastAudioMag=mag;
+        this.audio.updateFromMagnitude(mag);
+      } else if(this._lastAudioMag){
+        this.audio.updateFromMagnitude(this._lastAudioMag);
+      }
+    }
     _loop(){
       requestAnimationFrame((t)=>this._loop(t));
       const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs);
       this._lastFrameTs=now;
       const dtSec=dt/1000;
       this.analysisTick(dtSec);
+      this._updateAudioTick();
       if(this.rotationActive||this.emergentActive){
         this._drawFrame(dtSec);
         this.fps=1000/dt;
