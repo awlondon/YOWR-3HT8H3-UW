@@ -911,14 +911,18 @@ this._ridgeHold.set(
     }
     _updateModeIndicator(){
       if(!this.modeIndicator) return;
+      let mode=this._getModeLabel();
+      if(this.audioEnabled) mode=`${mode} + Audio`;
+      this.modeIndicator.textContent=`Mode: ${mode}`;
+      this._applySpectralMarkerAuto();
+    }
+    _getModeLabel(){
       let mode='Explore';
       if(this.emergentActive) mode='Emergent';
       else if(this.rotationActive) mode='Motion';
       else if(this.entityFocusActive) mode='Entity';
       else if(this.focusModeActive) mode='Portal';
-      if(this.audioEnabled) mode=`${mode} + Audio`;
-      this.modeIndicator.textContent=`Mode: ${mode}`;
-      this._applySpectralMarkerAuto();
+      return mode;
     }
     _syncAudioUi(){
       if(this.toggleAudioBtn){
@@ -1003,9 +1007,9 @@ this._ridgeHold.set(
     }
     _applyPanelLayout(){
       const hasSpectrogramSession=(this.liveSpecEnabled&&this.audioEnabled)||this._specReplayActive||Boolean(this._specFrames?.length);
-      const hasFftPanel=this.audioEnabled||this.oscilloscopeVisible||this.liveSpecEnabled||this._specReplayActive;
-      const hasSpectrogram=this.specPanelVisible&&(hasSpectrogramSession||hasFftPanel);
-      const hasOscilloscope=this.oscilloscopeVisible&&hasSpectrogramSession;
+      const hasFftPanel=true;
+      const hasSpectrogram=this.specPanelVisible;
+      const hasOscilloscope=this.oscilloscopeVisible&&hasSpectrogramSession&&this.audioEnabled;
       this._updateAnalysisVisibility({hasSpectrogram,hasOscilloscope});
     }
     _applyVolumeFromSlider(){
@@ -1926,24 +1930,21 @@ this._ridgeHold.set(
       return slices;
     }
 
-    _renderFftStackPanel(){
+    _renderFftStackPanel({muted=false}={}){
       if(!this.fftStackPanel) return;
       if(!this._fftSlices.length) this._ensureFftSlices();
       const slices=this._collectFftSlices();
       for(let i=0;i<this._fftSlices.length;i++){
         const canvas=this._fftSlices[i];
         const slice=slices[i] ?? null;
-        this._drawFftSlice(canvas,slice);
+        this._drawFftSlice(canvas,slice,{muted});
       }
     }
 
-    _drawFftSlice(canvas,slice){
+    _drawFftSlice(canvas,slice,{muted=false}={}){
       if(!canvas) return;
       const ctx=canvas.getContext('2d');
       if(!ctx) return;
-      console.log('FFT DRAW TICK', performance.now());
-      const fftData=slice?.data;
-      console.log('FFT DATA LEN', fftData?.length, fftData?.slice?.(0,5));
       const dpr=Math.max(1,window.devicePixelRatio||1);
       const w=canvas.clientWidth|0;
       const h=canvas.clientHeight|0;
@@ -1959,6 +1960,17 @@ this._ridgeHold.set(
       ctx.fillRect(0,0,50,20);
       ctx.fillStyle='rgba(0,255,0,0.8)';
       ctx.fillRect(0,0,4,4);
+      if(muted){
+        ctx.strokeStyle='rgba(255,255,255,0.2)';
+        ctx.beginPath();
+        ctx.moveTo(0,h/2);
+        ctx.lineTo(w,h/2);
+        ctx.stroke();
+        ctx.fillStyle='rgba(255,255,255,0.45)';
+        ctx.font='10px ui-monospace, Menlo, Consolas, monospace';
+        ctx.fillText('Audio muted',8,14);
+        return;
+      }
       if(!slice || !slice.data || slice.data.length<2){
         ctx.fillStyle='rgba(255,255,255,0.35)';
         ctx.font='10px ui-monospace, Menlo, Consolas, monospace';
@@ -2040,6 +2052,11 @@ this._ridgeHold.set(
     }
 
     _drawSpectrogram(dtSec){
+      if(!this.audioEnabled){
+        this._drawMutedSpectrogramPanel();
+        this._renderFftStackPanel({muted:true});
+        return;
+      }
       if(this.specPanelVisible){
         this._renderSpectrogramPanel(dtSec);
         this._drawSpectralMarkersOverlay();
@@ -2067,6 +2084,20 @@ this._ridgeHold.set(
       } else if(view==='level-time'){
         this._drawLevelTimeSpectrogram({Lmax});
       }
+    }
+    _drawMutedSpectrogramPanel(){
+      if(!this.specPanelVisible||!this.specCtx||!this.specCanvas) return;
+      const ctx=this.specCtx;
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
+      ctx.save();
+      ctx.fillStyle='#05060a';
+      ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='rgba(255,255,255,0.6)';
+      ctx.font='12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.fillText('Audio muted — spectrogram paused',12,18);
+      ctx.restore();
+      this._specPanelInfo=null;
     }
 
     _pushHudWarning(msg,ttlMs=2500){
@@ -3838,21 +3869,24 @@ this._ridgeHold.set(
       const ctx=this.ctx,w=this.canvas.clientWidth,h=this.canvas.clientHeight; ctx.fillStyle=this.whiteBg?'#fff':'#000'; ctx.fillRect(0,0,w,h);
       const L=Math.max(0,this.levels|0);
       let drew=false;
-      let renderTris=null;
       if(this.emergentActive){
         if(!this.emergentPaused) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
         const angle=this._snapAngle(this.emergentAngle);
-        if(this.gen.level_tris[L]===null){this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels."); return}
-        const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
-        const rotated=new Array(seed.length);
-        for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
-        let allTris;
-        if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
-        const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
-        for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
-        this._updateLiveSpectrogram(allTris,dtSec);
-        drew=true;
-      } else if(this.rotationActive){
+        if(this.gen.level_tris[L]===null){
+          this._statusMsg("Emergent rotation is disabled in portal-deferred mode for high levels.");
+        } else {
+          const seed=this.gen.activeSeedTris(), centers=this.gen.activeCenters(); if(!seed||!seed.length) return;
+          const rotated=new Array(seed.length);
+          for(let i=0;i<seed.length;i++){const tri=seed[i],c=centers[i]; rotated[i]=[rotatePointAround(tri[0],c,angle),rotatePointAround(tri[1],c,angle),rotatePointAround(tri[2],c,angle)]}
+          let allTris;
+          if(L===0){allTris=rotated}else{const pivot=(L===1)?this.gen.center:this.gen.activePivot(), copies=[rotated]; for(let i=1;i<this.sides;i++){const ang=(TAU/this.sides)*i; copies.push(rotateTrianglesAround(rotated,pivot,ang))} allTris=copies.flat()}
+          const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
+          for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          this._updateLiveSpectrogram(allTris,dtSec);
+          drew=true;
+        }
+      }
+      if(!drew && this.rotationActive){
         if(this.gen.level_tris[L]===null){
           if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angleRaw=this.globalAngle;
@@ -3867,7 +3901,8 @@ this._ridgeHold.set(
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
           drew=true;
         }
-      } else {
+      }
+      if(!drew){
         const base=this.gen.activeTriangles();
         if(base&&base.length){const fills=this._currentColorArray(base), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null; for(let i=0;i<base.length;i++) this._drawTriangle(base[i],fills[i],stroke,lw); drew=true}
         else{const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot(); if(seed&&seed.length){this._drawDeferred(seed,pivot); drew=true}}
@@ -4048,19 +4083,16 @@ this._ridgeHold.set(
       }
     }
     _loop(){
+      console.log('RENDER TICK', this.audioEnabled, this._getModeLabel());
       requestAnimationFrame((t)=>this._loop(t));
       const now=performance.now(), dt=Math.max(1,now-this._lastFrameTs);
       this._lastFrameTs=now;
       const dtSec=dt/1000;
       this.analysisTick(dtSec);
-      this._updateAudioTick();
+      this._drawFrame(dtSec);
       if(this.rotationActive||this.emergentActive){
-        this._drawFrame(dtSec);
         this.fps=1000/dt;
         this._updateStatus();
-      } else if(!this._drawnOnce){
-        this._drawFrame(0);
-        this._drawnOnce=true;
       }
       this._drawSpectrogram(dtSec);
       this._drawWaveform();
