@@ -73,6 +73,10 @@
     .spec-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
     .spec-controls-panel{background:var(--panel);border-bottom:1px solid var(--border)}
     .spec-readout{position:absolute;left:10px;bottom:8px;font-size:12px;color:var(--muted);background:rgba(0,0,0,0.55);padding:4px 8px;border-radius:8px;border:1px solid var(--border);z-index:2;pointer-events:none}
+    .hlsf-tooltip{position:absolute;left:10px;top:10px;font-size:12px;color:var(--ink);background:rgba(0,0,0,0.7);padding:6px 8px;border-radius:8px;border:1px solid var(--border);z-index:5;pointer-events:none;opacity:0;transition:opacity .12s ease}
+    .hlsf-tooltip.active{opacity:1}
+    .spectral-tooltip{position:absolute;left:10px;top:10px;font-size:12px;color:var(--ink);background:rgba(0,0,0,0.7);padding:6px 8px;border-radius:8px;border:1px solid var(--border);z-index:5;pointer-events:none;opacity:0;transition:opacity .12s ease}
+    .spectral-tooltip.active{opacity:1}
     .spec-meta{font-size:12px;color:var(--muted)}
     .scope-header{position:relative;z-index:2;padding:6px 10px;font-size:12px;color:var(--muted);background:#0b0b0b;border-bottom:1px solid var(--border);text-transform:uppercase;letter-spacing:.3px}
     canvas{width:100%;height:100%;display:block}
@@ -280,6 +284,12 @@
             <span class="entity-label" id="entityLabel">Entity —</span>
           </div>
         </div>
+        <div class="group" style="grid-column: span 6;">
+          <h3>Spectral Overlays</h3>
+          <div class="row">
+            <button id="toggleSpectralMarkers" class="btn-neutral" aria-pressed="false">Spectral Markers</button>
+          </div>
+        </div>
       </div>
     </div>
     <input id="specFileInput" type="file" accept="application/json" style="display:none" />
@@ -372,6 +382,7 @@ this._ridgeHold.set(
     <div id="hlsfPanel" class="panel panel-hlsf">
       <div id="hlsfCanvasWrap" class="canvas-wrap">
         <canvas id="hlsfCanvas" tabindex="0"></canvas>
+        <div id="hlsfTooltip" class="hlsf-tooltip"></div>
       </div>
     </div>
 
@@ -389,6 +400,7 @@ this._ridgeHold.set(
         </div>
       </div>
       <div class="spec-readout" id="specReadout">ω — | L — | val —</div>
+      <div class="spectral-tooltip" id="spectralTooltip"></div>
     </div>
 
     <div id="oscilloscopePanel" class="panel panel-wave">
@@ -610,6 +622,8 @@ this._ridgeHold.set(
       this.specCanvas=document.getElementById('spectrogramCanvas');
       this.specCtx=this.specCanvas?this.specCanvas.getContext('2d'):null;
       this.specReadout=document.getElementById('specReadout');
+      this.hlsfTooltip=document.getElementById('hlsfTooltip');
+      this.spectralTooltip=document.getElementById('spectralTooltip');
       this.waveCanvas=document.getElementById('waveCanvas');
       this.waveCtx=this.waveCanvas?this.waveCanvas.getContext('2d'):null;
       this.scopeBuf=new Float32Array(512);
@@ -628,6 +642,7 @@ this._ridgeHold.set(
       this.specZoomLevelInBtn=document.getElementById('specZoomLevelIn');
       this.specZoomLevelOutBtn=document.getElementById('specZoomLevelOut');
       this.specZoomResetBtn=document.getElementById('specZoomReset');
+      this.toggleSpectralMarkersBtn=document.getElementById('toggleSpectralMarkers');
 
       this.center=[0,0]; this.radius=1; this.sides=12; this.levels=2;
       this.edgesOnly=true; this.whiteBg=true; this.colorMode='distinct';
@@ -647,6 +662,7 @@ this._ridgeHold.set(
       this.selectedOmega=this.cubeSliceBin;
       this.selectedLevel=this.levels;
       this._omegaLevelPanel=null;
+      this._omegaTimePanel=null;
       this._specPanelInfo=null;
       this.specPanelVisible=true;
       this.oscilloscopeVisible=true;
@@ -697,6 +713,13 @@ this._ridgeHold.set(
       this._entityFFT=null;
       this._hudWarning=null;
       this.canvasFocused=false;
+      this.activeIso={level:this.levels,triId:-1,verticesWorld:[[0,0],[0,0],[0,0]],centerWorld:[0,0],boundsWorld:{min:[0,0],max:[0,0]},edgeListWorld:[[[0,0],[0,0]],[[0,0],[0,0]],[[0,0],[0,0]]]};
+      this._isoBoundarySamples=[];
+      this._isoSpectralMapping=null;
+      this._isoHoverSample=null;
+      this._spectralMarkerHoverBin=null;
+      this.spectralMarkersEnabled=false;
+      this.spectralMarkersAuto=true;
       // --- Audio (view-updated wavetable) ---
       this.audioEnabled=true;         // start enabled for default audio playback
       this.audioMode='legacy';
@@ -736,6 +759,7 @@ this._ridgeHold.set(
       this._applyBg(); this.toggleEdgesBtn.textContent="Show Colors"; this._autoAlphaIfColors(); this.downloadPngBtn.textContent="Save PNG";
       this._updateButtonsEnabled(); this._updateSnapLabel(); this._updateEntityLabel(); this._updateSpecInfo(); this._setSpectrogramView(this.primaryView); this._updatePlot(true);
       this._syncAudioUi();
+      this._syncSpectralMarkersToggle();
       this._updateAudioStatus();
       this._applyVolumeFromSlider();
       this._loop();
@@ -758,6 +782,22 @@ this._ridgeHold.set(
 
     _screenToWorld([sx,sy]){const x=(sx-this.tx)/(200*this.scale), y=-(sy-this.ty)/(200*this.scale); return[x,y]}
     _worldViewRect(){const w=this.canvas.clientWidth,h=this.canvas.clientHeight,p0=this._screenToWorld([0,0]),p1=this._screenToWorld([w,h]);return[Math.min(p0[0],p1[0]),Math.min(p0[1],p1[1]),Math.max(p0[0],p1[0]),Math.max(p0[1],p1[1])]}
+    _viewCenterWorld(){
+      return this._screenToWorld([this.canvas.clientWidth/2,this.canvas.clientHeight/2]);
+    }
+    _approximateDeferredTris(seed,pivot,angle){
+      if(!seed||!seed.length) return seed;
+      const center=this._viewCenterWorld();
+      const n=this.sides;
+      const theta0=canonicalStartAngle(n);
+      const dTheta=TAU/n;
+      const ang=Math.atan2(center[1]-pivot[1],center[0]-pivot[0]);
+      const normalized=(ang-theta0+TAU*4)%TAU;
+      const side=Math.floor(normalized/dTheta);
+      const sideAngle=(TAU/n)*side;
+      const total=angle+sideAngle;
+      return seed.map(tri=>tri.map(p=>rotatePointAround(p,pivot,total)));
+    }
     getVisibleTriangles(){
       const view=this._worldViewRect();
       return this.gen.activeTriangles().filter(tri =>
@@ -804,6 +844,7 @@ this._ridgeHold.set(
       else if(this.focusModeActive) mode='Portal';
       if(this.audioEnabled) mode=`${mode} + Audio`;
       this.modeIndicator.textContent=`Mode: ${mode}`;
+      this._applySpectralMarkerAuto();
     }
     _syncAudioUi(){
       if(this.toggleAudioBtn){
@@ -821,6 +862,25 @@ this._ridgeHold.set(
       this._updateModeIndicator();
       this._applyPanelLayout();
       this._updateAudioStatus();
+    }
+    _syncSpectralMarkersToggle(){
+      if(!this.toggleSpectralMarkersBtn) return;
+      this.toggleSpectralMarkersBtn.setAttribute('aria-pressed',String(this.spectralMarkersEnabled));
+      this.toggleSpectralMarkersBtn.textContent=this.spectralMarkersEnabled ? 'Spectral Markers: On' : 'Spectral Markers';
+      if(!this.spectralMarkersEnabled){
+        this._clearHlsfHover();
+        this._clearSpectrogramHover();
+      }
+    }
+    _applySpectralMarkerAuto(){
+      if(!this.spectralMarkersAuto) return;
+      const isExplore=!this.emergentActive && !this.rotationActive && !this.entityFocusActive && !this.focusModeActive;
+      const shouldEnable=this.focusModeActive || (isExplore && this.audioEnabled);
+      this.spectralMarkersEnabled=shouldEnable;
+      this._syncSpectralMarkersToggle();
+    }
+    _resolveSpectralMarkersActive(){
+      return !!this.spectralMarkersEnabled;
     }
 
     _updateAudioStatus(){
@@ -1059,6 +1119,14 @@ this._ridgeHold.set(
         this.specZoomLevelOutBtn.addEventListener('click',()=>this._zoomSpectrogram({level:1/1.15}));
         this.specZoomResetBtn.addEventListener('click',()=>this._resetSpectrogramZoom());
       }
+      if(this.toggleSpectralMarkersBtn){
+        this.toggleSpectralMarkersBtn.addEventListener('click',()=>{
+          this.spectralMarkersAuto=false;
+          this.spectralMarkersEnabled=!this.spectralMarkersEnabled;
+          this._syncSpectralMarkersToggle();
+          this._render();
+        });
+      }
       if(this.sliceBinInput){
         this.sliceBinInput.addEventListener('change',()=>this._applySliceBinFromInput());
         this.sliceBinInput.addEventListener('blur',()=>this._applySliceBinFromInput());
@@ -1073,6 +1141,13 @@ this._ridgeHold.set(
         this.dragging=true;
         this.dragMoved=false;
         this.dragStart=[e.clientX,e.clientY];
+      });
+      this.canvas.addEventListener('mousemove',e=>{
+        if(this.dragging) return;
+        this._updateHlsfHover(e);
+      });
+      this.canvas.addEventListener('mouseleave',()=>{
+        this._clearHlsfHover();
       });
       window.addEventListener('mousemove',e=>{
         if(!this.dragging)return;
@@ -1092,8 +1167,8 @@ this._ridgeHold.set(
       });
       this.canvas.addEventListener('wheel',e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9; this._zoomAtClientPoint(f,e.clientX,e.clientY); this._render(); this._refreshAudioParams()},{passive:false});
       if(this.specCanvas){
-        this.specCanvas.addEventListener('mousemove',e=>this._updateSpectrogramReadout(e));
-        this.specCanvas.addEventListener('mouseleave',()=>this._clearSpectrogramReadout());
+        this.specCanvas.addEventListener('mousemove',e=>this._handleSpectrogramMove(e));
+        this.specCanvas.addEventListener('mouseleave',()=>this._clearSpectrogramHover());
         this.specCanvas.addEventListener('click',e=>this._handleOmegaLevelClick(e.clientX,e.clientY));
       }
       window.addEventListener('keydown',e=>{
@@ -1812,7 +1887,7 @@ this._ridgeHold.set(
       setBtn(this.specViewOmegaLevelBtn,view==='omega-level');
       setBtn(this.specViewOmegaTimeBtn,view==='omega-time');
       setBtn(this.specViewLevelTimeBtn,view==='level-time');
-      this._clearSpectrogramReadout();
+      this._clearSpectrogramHover();
       this._drawSpectrogram(0);
     }
 
@@ -1852,6 +1927,117 @@ this._ridgeHold.set(
         this.specReadout.textContent=next;
         this._specLastReadout=next;
       }
+    }
+    _handleSpectrogramMove(evt){
+      this._updateSpectrogramReadout(evt);
+      this._updateSpectralMarkerHover(evt);
+    }
+    _clearSpectrogramHover(){
+      this._clearSpectrogramReadout();
+      const hadHover=this._spectralMarkerHoverBin!==null;
+      this._spectralMarkerHoverBin=null;
+      if(this.spectralTooltip){
+        this.spectralTooltip.classList.remove('active');
+      }
+      if(hadHover) this._render();
+    }
+    _updateSpectralMarkerHover(evt){
+      if(!this._resolveSpectralMarkersActive()) return;
+      if(!this._isoSpectralMapping) return;
+      const view=this.primaryView;
+      if(view!=='omega-level' && view!=='omega-time') return;
+      const rect=this.specCanvas.getBoundingClientRect();
+      const x=evt.clientX-rect.left;
+      const y=evt.clientY-rect.top;
+      const omegaPanel=view==='omega-level' ? this._omegaLevelPanel : this._omegaTimePanel;
+      if(!omegaPanel) return;
+      const omegaMinLog=omegaPanel.omegaMinLog;
+      const omegaMaxLog=omegaPanel.omegaMaxLog;
+      const omegaMax=omegaPanel.omegaMax ?? 1;
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
+      const u=view==='omega-level'
+        ? clamp(x/w,0,1)
+        : 1-clamp(y/h,0,1);
+      const logOmega=omegaMinLog+u*(omegaMaxLog-omegaMinLog);
+      const omegaBin=clamp(Math.round(Math.exp(logOmega)),1,omegaMax);
+      let bestBin=null;
+      let bestDist=Infinity;
+      for(const sample of this._isoSpectralMapping.samples){
+        if(!sample.tick) continue;
+        const mappedOmega=clamp(Math.round(this._isoSpectralMapping.logMap?.[sample.binIndex] ?? 0),1,omegaMax);
+        const dist=Math.abs(mappedOmega-omegaBin);
+        if(dist<bestDist){
+          bestDist=dist;
+          bestBin=sample.binIndex;
+        }
+      }
+      if(bestBin===null || bestDist>Math.max(2,omegaMax*0.05)){
+        const hadHover=this._spectralMarkerHoverBin!==null;
+        this._spectralMarkerHoverBin=null;
+        if(this.spectralTooltip){
+          this.spectralTooltip.classList.remove('active');
+        }
+        if(hadHover) this._render();
+        return;
+      }
+      const prevBin=this._spectralMarkerHoverBin;
+      this._spectralMarkerHoverBin=bestBin;
+      if(prevBin!==bestBin) this._render();
+      if(this.spectralTooltip){
+        const label=`ω ${omegaBin} | bin ${bestBin}`;
+        this.spectralTooltip.textContent=label;
+        this.spectralTooltip.style.left=`${evt.clientX-rect.left+12}px`;
+        this.spectralTooltip.style.top=`${evt.clientY-rect.top+12}px`;
+        this.spectralTooltip.classList.add('active');
+      }
+    }
+    _clearHlsfHover(){
+      const hadHover=!!this._isoHoverSample;
+      this._isoHoverSample=null;
+      if(this.hlsfTooltip){
+        this.hlsfTooltip.classList.remove('active');
+      }
+      if(hadHover) this._render();
+    }
+    _updateHlsfHover(evt){
+      if(!this._resolveSpectralMarkersActive()) return;
+      if(!this._isoBoundarySamples.length) return;
+      const rect=this.canvas.getBoundingClientRect();
+      const x=evt.clientX-rect.left;
+      const y=evt.clientY-rect.top;
+      let best=null;
+      let bestDist=Infinity;
+      const radius=10;
+      for(const sample of this._isoBoundarySamples){
+        const dx=sample.screen[0]-x;
+        const dy=sample.screen[1]-y;
+        const dist=Math.hypot(dx,dy);
+        if(dist<radius && dist<bestDist){
+          best=sample;
+          bestDist=dist;
+        }
+      }
+      if(!best){
+        this._clearHlsfHover();
+        return;
+      }
+      const prevSample=this._isoHoverSample;
+      this._isoHoverSample=best;
+      if(this.hlsfTooltip){
+        const fftLength=this._isoSpectralMapping?.fftLength ?? 1;
+        const sampleRate=this.audio?.ctx?.sampleRate ?? 44100;
+        const freqHz=(best.fftIndex/(fftLength*2))*sampleRate;
+        const energy=best.energy ?? 0;
+        this.hlsfTooltip.innerHTML=
+          `L ${this.activeIso.level} | tri ${this.activeIso.triId}<br>`+
+          `edge ${best.edge+1} | t ${best.t.toFixed(2)}<br>`+
+          `bin ${best.binIndex} | ${freqHz.toFixed(1)} Hz | E ${energy.toFixed(3)}`;
+        this.hlsfTooltip.style.left=`${best.screen[0]+12}px`;
+        this.hlsfTooltip.style.top=`${best.screen[1]+12}px`;
+        this.hlsfTooltip.classList.add('active');
+      }
+      if(prevSample!==best) this._render();
     }
 
     _initFftStackPanel(){
@@ -1951,6 +2137,19 @@ this._ridgeHold.set(
         const barH=display*h;
         ctx.fillRect(x,h-barH,barDrawW,barH);
       }
+      if(this._resolveSpectralMarkersActive() && this._isoSpectralMapping){
+        const binsToMark=new Set(this._isoSpectralMapping.samples.filter(s=>s.tick).map(s=>s.binIndex));
+        ctx.lineWidth=1;
+        for(const binIndex of binsToMark){
+          const x=binIndex*barW+barW/2;
+          const hoverBoost=this._spectralMarkerHoverBin!==null && binIndex===this._spectralMarkerHoverBin;
+          ctx.strokeStyle=hoverBoost?'rgba(180,230,255,0.6)':'rgba(180,230,255,0.35)';
+          ctx.beginPath();
+          ctx.moveTo(x,0);
+          ctx.lineTo(x,h);
+          ctx.stroke();
+        }
+      }
       ctx.strokeStyle='rgba(255,255,255,0.25)';
       ctx.strokeRect(0.5,0.5,w-1,h-1);
     }
@@ -1982,6 +2181,7 @@ this._ridgeHold.set(
     _drawSpectrogram(dtSec){
       if(!this.specPanelVisible) return;
       this._renderSpectrogramPanel(dtSec);
+      this._drawSpectralMarkersOverlay();
       this._drawLiveSpectrogramHUD();
       this._renderFftStackPanel();
     }
@@ -2264,8 +2464,161 @@ this._ridgeHold.set(
       const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
       return (cx>=xmin&&cx<=xmax&&cy>=ymin&&cy<=ymax) ? 1 : 0;
     }
+    _updateActiveIso(tris){
+      const level=Math.max(0,this.levels|0);
+      if(!tris||!tris.length){
+        this.activeIso={
+          level,
+          triId:-1,
+          verticesWorld:[[0,0],[0,0],[0,0]],
+          centerWorld:[0,0],
+          boundsWorld:{min:[0,0],max:[0,0]},
+          edgeListWorld:[[[0,0],[0,0]],[[0,0],[0,0]],[[0,0],[0,0]]]
+        };
+        return;
+      }
+      const view=this._worldViewRect();
+      const center=this._viewCenterWorld();
+      let bestIndex=0;
+      let bestScore=Infinity;
+      let bestInside=false;
+      for(let i=0;i<tris.length;i++){
+        const tri=tris[i];
+        const cx=(tri[0][0]+tri[1][0]+tri[2][0])/3;
+        const cy=(tri[0][1]+tri[1][1]+tri[2][1])/3;
+        const inside=cx>=view[0]&&cx<=view[2]&&cy>=view[1]&&cy<=view[3];
+        const dist=Math.hypot(cx-center[0],cy-center[1]);
+        if(inside && !bestInside){
+          bestInside=true;
+          bestIndex=i;
+          bestScore=dist;
+          continue;
+        }
+        if(inside===bestInside && dist<bestScore){
+          bestIndex=i;
+          bestScore=dist;
+        }
+      }
+      const tri=tris[bestIndex];
+      const verticesWorld=tri.map(p=>p.slice());
+      const centerWorld=this._triangleCentroid(verticesWorld);
+      let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
+      for(const [x,y] of verticesWorld){
+        xmin=Math.min(xmin,x);
+        xmax=Math.max(xmax,x);
+        ymin=Math.min(ymin,y);
+        ymax=Math.max(ymax,y);
+      }
+      this.activeIso={
+        level,
+        triId:bestIndex,
+        verticesWorld,
+        centerWorld,
+        boundsWorld:{min:[xmin,ymin],max:[xmax,ymax]},
+        edgeListWorld:[[verticesWorld[0],verticesWorld[1]],[verticesWorld[1],verticesWorld[2]],[verticesWorld[2],verticesWorld[0]]]
+      };
+    }
     _levelWeight(level){
       return Math.pow(0.78, level);
+    }
+    _isoRadiusRange(activeIso){
+      const center=activeIso.centerWorld;
+      let rMin=Infinity;
+      let rMax=0;
+      for(const v of activeIso.verticesWorld){
+        const r=Math.hypot(v[0]-center[0],v[1]-center[1]);
+        rMin=Math.min(rMin,r);
+        rMax=Math.max(rMax,r);
+      }
+      if(!Number.isFinite(rMin)||!Number.isFinite(rMax)||!(rMax>rMin)){
+        rMin=0;
+        rMax=1;
+      }
+      return {rMin,rMax};
+    }
+    _computeIsoBoundarySamples(activeIso,{samplesPerEdge=64}={}){
+      const samples=[];
+      if(!activeIso?.edgeListWorld?.length) return samples;
+      const count=Math.max(2,Math.round(samplesPerEdge));
+      const edges=activeIso.edgeListWorld;
+      for(let e=0;e<edges.length;e++){
+        const [p0,p1]=edges[e];
+        for(let i=0;i<count;i++){
+          const t=count===1 ? 0 : i/(count-1);
+          const wx=p0[0]+(p1[0]-p0[0])*t;
+          const wy=p0[1]+(p1[1]-p0[1])*t;
+          const [sx,sy]=this._worldToScreen([wx,wy]);
+          samples.push({
+            edge:e,
+            t,
+            world:[wx,wy],
+            screen:[sx,sy],
+            tick:i%8===0
+          });
+        }
+      }
+      return samples;
+    }
+    _resolveMarkerFftData(){
+      if(this._entityFFT?.length) return this._entityFFT;
+      const liveRows=this._liveSpecBuf?.length ?? 0;
+      if((this.liveSpecEnabled || this._specReplayActive) && liveRows){
+        const idx=(this._liveSpecHead-1+liveRows)%liveRows;
+        const row=this._liveSpecBuf[idx];
+        if(row?.length) return row;
+      }
+      return null;
+    }
+    _computeIsoSpectralMapping(activeIso,fftData){
+      if(!activeIso) return null;
+      const data=fftData ?? null;
+      const fftLength=Math.max(2,Math.round(data?.length ?? (this._analysisBins/2)));
+      const targetBins=Math.max(1,fftLength-1);
+      const logMap=this._getFftLogMap(fftLength,targetBins);
+      const {rMin,rMax}=this._isoRadiusRange(activeIso);
+      const samples=this._computeIsoBoundarySamples(activeIso,{samplesPerEdge:64});
+      let maxEnergy=0;
+      if(data){
+        for(let i=1;i<Math.min(data.length,fftLength);i++){
+          maxEnergy=Math.max(maxEnergy,data[i]??0);
+        }
+      }
+      if(!(maxEnergy>0)) maxEnergy=1;
+      let minBin=targetBins-1;
+      let maxBin=0;
+      for(const sample of samples){
+        const r=Math.hypot(sample.world[0]-activeIso.centerWorld[0],sample.world[1]-activeIso.centerWorld[1]);
+        const rNorm=clamp((r-rMin)/(rMax-rMin||1),0,1);
+        const binIndex=Math.floor(rNorm*(targetBins-1));
+        const fftIndex=logMap[binIndex] ?? 0;
+        const energy=data ? (data[fftIndex] ?? 0) : 0;
+        sample.binIndex=binIndex;
+        sample.fftIndex=fftIndex;
+        sample.energy=energy;
+        sample.energyNorm=clamp(energy/maxEnergy,0,1);
+        if(binIndex<minBin) minBin=binIndex;
+        if(binIndex>maxBin) maxBin=binIndex;
+      }
+      if(minBin>maxBin){
+        minBin=0;
+        maxBin=0;
+      }
+      const vertexBins=activeIso.verticesWorld.map((v)=>{
+        const r=Math.hypot(v[0]-activeIso.centerWorld[0],v[1]-activeIso.centerWorld[1]);
+        const rNorm=clamp((r-rMin)/(rMax-rMin||1),0,1);
+        const binIndex=Math.floor(rNorm*(targetBins-1));
+        const fftIndex=logMap[binIndex] ?? 0;
+        return {binIndex,fftIndex};
+      });
+      return {
+        samples,
+        vertexBins,
+        minBin,
+        maxBin,
+        fftLength,
+        targetBins,
+        logMap
+      };
     }
     _mapRadiusToOmega(r,{omegaMin=1,omegaMax=64,rMin=null,rMax=null}={}){
       const bounds=this._entityRadiusBounds();
@@ -2624,6 +2977,11 @@ this._ridgeHold.set(
       const omegaCenter=clamp(logMin+logSpan*(0.5+this.specPanOmega),logMin+omegaSpan/2,logMax-omegaSpan/2);
       const omegaMinLog=omegaCenter-omegaSpan/2;
       const omegaMaxLog=omegaCenter+omegaSpan/2;
+      this._omegaTimePanel={
+        omegaMinLog,
+        omegaMaxLog,
+        omegaMax:bins-1
+      };
 
       const levelZoom=clamp(this.specZoomLevel,1,8);
       const levelSpan=totalLevels/levelZoom;
@@ -3060,6 +3418,7 @@ this._ridgeHold.set(
     }
     _drawOmegaTimeSpectrogram(){
       const ctx=this.specCtx;
+      this._omegaTimePanel=null;
       if(!ctx) return;
       if(!this.liveSpecEnabled&&!this._specReplayActive){
         ctx.save();
@@ -3262,6 +3621,140 @@ this._ridgeHold.set(
         else ctx.lineTo(px,py);
       }
       ctx.stroke();
+      ctx.restore();
+    }
+    _drawIsoBoundaryOverlay(){
+      if(!this._resolveSpectralMarkersActive()) return;
+      const activeIso=this.activeIso;
+      if(!activeIso||!activeIso.edgeListWorld?.length) return;
+      if(!this._isoSpectralMapping) return;
+      const ctx=this.ctx;
+      const samples=this._isoSpectralMapping.samples;
+      const edgeColor=this.whiteBg ? 'rgba(20,40,60,0.75)' : 'rgba(108,204,255,0.65)';
+      ctx.save();
+      ctx.lineWidth=this._lineWidthPx()*1.6;
+      ctx.strokeStyle=edgeColor;
+      ctx.beginPath();
+      const [a,b,c]=activeIso.verticesWorld;
+      const pa=this._worldToScreen(a);
+      const pb=this._worldToScreen(b);
+      const pc=this._worldToScreen(c);
+      ctx.moveTo(pa[0],pa[1]);
+      ctx.lineTo(pb[0],pb[1]);
+      ctx.lineTo(pc[0],pc[1]);
+      ctx.closePath();
+      ctx.stroke();
+
+      const edgeScreens=activeIso.edgeListWorld.map(([p0,p1])=>{
+        const s0=this._worldToScreen(p0);
+        const s1=this._worldToScreen(p1);
+        return [s0,s1];
+      });
+
+      const tickLen=4;
+      for(const sample of samples){
+        if(!sample.tick) continue;
+        const [sx,sy]=sample.screen;
+        const [e0,e1]=edgeScreens[sample.edge];
+        const dx=e1[0]-e0[0];
+        const dy=e1[1]-e0[1];
+        const len=Math.hypot(dx,dy)||1;
+        const nx=-dy/len;
+        const ny=dx/len;
+        const energyAlpha=Math.pow(sample.energyNorm??0,0.8);
+        const hoverBoost=(this._isoHoverSample && this._isoHoverSample===sample) || (this._spectralMarkerHoverBin!==null && sample.binIndex===this._spectralMarkerHoverBin);
+        const alpha=clamp(0.15+energyAlpha*0.85,0,1)*(hoverBoost?1.3:1);
+        ctx.strokeStyle=this.whiteBg
+          ? `rgba(0,0,0,${alpha})`
+          : `rgba(140,220,255,${alpha})`;
+        ctx.lineWidth=1.2;
+        ctx.beginPath();
+        ctx.moveTo(sx-nx*tickLen,sy-ny*tickLen);
+        ctx.lineTo(sx+nx*tickLen,sy+ny*tickLen);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    _drawSpectralMarkersOverlay(){
+      if(!this._resolveSpectralMarkersActive()) return;
+      if(!this.specCtx||!this.specCanvas) return;
+      if(!this._isoSpectralMapping) return;
+      const view=this.primaryView;
+      if(view!=='omega-level' && view!=='omega-time') return;
+      const ctx=this.specCtx;
+      const w=this.specCanvas.width;
+      const h=this.specCanvas.height;
+      const mapping=this._isoSpectralMapping;
+      const omegaPanel=view==='omega-level' ? this._omegaLevelPanel : this._omegaTimePanel;
+      if(!omegaPanel) return;
+      const omegaMax=omegaPanel.omegaMax ?? omegaPanel.bins ?? 1;
+      const omegaMinLog=omegaPanel.omegaMinLog;
+      const omegaMaxLog=omegaPanel.omegaMaxLog;
+      const binToOmega=(binIndex)=>{
+        const omega=mapping.logMap?.[binIndex] ?? 0;
+        return clamp(Math.round(omega),1,omegaMax);
+      };
+      const omegaToX=(omega)=>{
+        const u=(Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1);
+        return u*w;
+      };
+      const omegaToY=(omega)=>{
+        const u=(Math.log(omega)-omegaMinLog)/(omegaMaxLog-omegaMinLog||1);
+        return (1-u)*h;
+      };
+      const uniqueBins=new Set(mapping.samples.filter(s=>s.tick).map(s=>s.binIndex));
+      const minBin=mapping.minBin;
+      const maxBin=mapping.maxBin;
+      const minOmega=binToOmega(minBin);
+      const maxOmega=binToOmega(maxBin);
+
+      ctx.save();
+      if(view==='omega-level'){
+        const xMin=omegaToX(minOmega);
+        const xMax=omegaToX(maxOmega);
+        ctx.fillStyle='rgba(108,204,255,0.08)';
+        ctx.fillRect(Math.min(xMin,xMax),0,Math.abs(xMax-xMin),h);
+      } else {
+        const yMin=omegaToY(minOmega);
+        const yMax=omegaToY(maxOmega);
+        ctx.fillStyle='rgba(108,204,255,0.08)';
+        ctx.fillRect(0,Math.min(yMin,yMax),w,Math.abs(yMax-yMin));
+      }
+
+      ctx.lineWidth=1;
+      for(const binIndex of uniqueBins){
+        const omega=binToOmega(binIndex);
+        const hoverBoost=this._spectralMarkerHoverBin!==null && binIndex===this._spectralMarkerHoverBin;
+        ctx.strokeStyle=hoverBoost?'rgba(180,230,255,0.65)':'rgba(140,200,255,0.28)';
+        ctx.beginPath();
+        if(view==='omega-level'){
+          const x=omegaToX(omega);
+          ctx.moveTo(x,0);
+          ctx.lineTo(x,h);
+        } else {
+          const y=omegaToY(omega);
+          ctx.moveTo(0,y);
+          ctx.lineTo(w,y);
+        }
+        ctx.stroke();
+      }
+
+      ctx.lineWidth=1.5;
+      ctx.strokeStyle='rgba(180,220,255,0.6)';
+      for(const vertex of mapping.vertexBins){
+        const omega=binToOmega(vertex.binIndex);
+        ctx.beginPath();
+        if(view==='omega-level'){
+          const x=omegaToX(omega);
+          ctx.moveTo(x,0);
+          ctx.lineTo(x,h);
+        } else {
+          const y=omegaToY(omega);
+          ctx.moveTo(0,y);
+          ctx.lineTo(w,y);
+        }
+        ctx.stroke();
+      }
       ctx.restore();
     }
     _drawLiveSpectrogramHUD(){
@@ -3498,6 +3991,7 @@ this._ridgeHold.set(
       const ctx=this.ctx,w=this.canvas.clientWidth,h=this.canvas.clientHeight; ctx.fillStyle=this.whiteBg?'#fff':'#000'; ctx.fillRect(0,0,w,h);
       const L=Math.max(0,this.levels|0);
       let drew=false;
+      let renderTris=null;
       if(this.emergentActive){
         if(!this.emergentPaused && !this.rotationLocked) this.emergentAngle+=this.rotationSpeed*dtSec*60*(Math.PI/180);
         const angleRaw=this.emergentAngle;
@@ -3515,6 +4009,7 @@ this._ridgeHold.set(
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
           if(seed&&seed.length){
             this._drawDeferred(seed,pivot,angle);
+            renderTris=this._approximateDeferredTris(seed,pivot,angle);
             drew=true;
           }
         } else {
@@ -3526,6 +4021,7 @@ this._ridgeHold.set(
           const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
           this._updateLiveSpectrogram(allTris,dtSec);
+          renderTris=allTris;
           drew=true;
         }
       } else if(this.rotationActive){
@@ -3534,13 +4030,18 @@ this._ridgeHold.set(
           const angleRaw=this.globalAngle;
           const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
-          if(seed&&seed.length){ this._drawDeferred(seed,pivot,angle); drew=true; }
+          if(seed&&seed.length){
+            this._drawDeferred(seed,pivot,angle);
+            renderTris=this._approximateDeferredTris(seed,pivot,angle);
+            drew=true;
+          }
         } else {
           if(!this.rotationLocked) this.globalAngle+=this.rotationSpeed*(Math.PI/180);
           const angleRaw=this.globalAngle;
           const angle=this.rotationLocked ? this.lockedAngle : this._snapAngle(angleRaw);
           const base=this.gen.activeTriangles(), pivot=this.gen.activePivot(), allTris=rotateTrianglesAround(base,pivot,angle), fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          renderTris=allTris;
           drew=true;
         }
       } else {
@@ -3550,14 +4051,23 @@ this._ridgeHold.set(
           const allTris=lockedAngle ? rotateTrianglesAround(base,this.gen.activePivot(),lockedAngle) : base;
           const fills=this._currentColorArray(allTris), lw=this._lineWidthPx(), stroke=this.edgesOnly?(this.whiteBg?'rgba(0,0,0,1)':'rgba(255,255,255,1)'):null;
           for(let i=0;i<allTris.length;i++) this._drawTriangle(allTris[i],fills[i],stroke,lw);
+          renderTris=allTris;
           drew=true;
         } else {
           const seed=this.gen.activeSeedTris(), pivot=this.gen.activePivot();
           if(seed&&seed.length){
             this._drawDeferred(seed,pivot,lockedAngle);
+            renderTris=this._approximateDeferredTris(seed,pivot,lockedAngle);
             drew=true;
           }
         }
+      }
+      if(drew){
+        this._updateActiveIso(renderTris);
+        const fftData=this._resolveMarkerFftData();
+        this._isoSpectralMapping=this._computeIsoSpectralMapping(this.activeIso,fftData);
+        this._isoBoundarySamples=this._isoSpectralMapping?.samples ?? [];
+        this._drawIsoBoundaryOverlay();
       }
       if(drew&&this.entityFocusActive&&this.primaryView!=="omega-level"){
         this._drawEntityFFTOverlay(this.activeEntityK);
