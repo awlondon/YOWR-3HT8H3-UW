@@ -2123,6 +2123,9 @@ this._ridgeHold.set(
       if(!canvas) return;
       const ctx=canvas.getContext('2d');
       if(!ctx) return;
+      console.log('FFT DRAW TICK', performance.now());
+      const fftData=slice?.data;
+      console.log('FFT DATA LEN', fftData?.length, fftData?.slice?.(0,5));
       const dpr=Math.max(1,window.devicePixelRatio||1);
       const w=canvas.clientWidth|0;
       const h=canvas.clientHeight|0;
@@ -2134,6 +2137,8 @@ this._ridgeHold.set(
       ctx.clearRect(0,0,w,h);
       ctx.fillStyle='#05060a';
       ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='red';
+      ctx.fillRect(0,0,50,20);
       ctx.fillStyle='rgba(0,255,0,0.8)';
       ctx.fillRect(0,0,4,4);
       if(!slice || !slice.data || slice.data.length<2){
